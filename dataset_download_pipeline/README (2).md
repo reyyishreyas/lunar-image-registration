@@ -13,30 +13,6 @@ python ch2_nac_overlap_pipeline.py --xml ch2_ohr_ncp_20210405T1606536730_d_img_d
 
 A testing pipeline for finding and downloading **LRO NAC images** that best overlap a given **Chandrayaan-2 OHRC image**.
 
-## Folder Structure
-
-Keep this pipeline separate from the main project:
-
-```text
-lunar-image-registration/
-│
-├── src/
-├── data/
-├── results/
-├── ...
-│
-└── tools/
-    └── lro_nac_overlap/
-        ├── ch2_nac_overlap_pipeline.py
-        ├── nac_overlap_ranker.py
-        ├── requirements.txt
-        ├── input/
-        │   ├── <OHRC_XML_FILE>.xml
-        │   └── <LROC_SEARCH_RESULTS_FILE>.txt
-        ├── downloads/
-        └── results/
-            └── ranked_candidates.csv
-```
 
 ## Requirements
 
@@ -151,15 +127,6 @@ python ch2_nac_overlap_pipeline.py --xml "my_ohrc_image.xml" --search-results "m
 
 The pipeline produces a ranked CSV containing the candidate results and downloads the selected NAC files.
 
-Example:
-
-```text
-tools/lro_nac_overlap/
-├── downloads/
-│   └── <downloaded NAC files>
-└── results/
-    └── ranked_candidates.csv
-```
 
 ## Current Status
 
