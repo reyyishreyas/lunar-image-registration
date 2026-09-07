@@ -1,4 +1,4 @@
-clip_limit,tile_grid,rmse_px,inliers,n_matches
-2.0,8,23.0273,154,201
-4.0,8,22.6316,236,286
-8.0,8,22.6496,241,315
+clip_limit,tile_grid,preproc,detector,matcher,outlier_rejection,refinement,rmse_px,inliers,inlier_ratio,n_matches,time_s
+2.0,8,georef+clahe:2.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,23.0273,154,0.7662,201,1.58
+4.0,8,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6316,236,0.8252,286,1.39
+8.0,8,georef+clahe:8.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6496,241,0.7651,315,1.66

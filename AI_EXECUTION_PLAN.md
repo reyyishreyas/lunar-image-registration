@@ -243,15 +243,18 @@ to `results/logs/ablation.csv`.
   `skimage.exposure.match_histograms`. Run as Config C2. Append the C2 row.
   RESULT: pass — src/preprocessing/normalize.py (histogram_match); C2 =
   georef+histmatch (OHRC crop -> NAC histogram): rmse_px=22.6605, inliers=223/325
-  (matches rose 61 -> 325 vs C1).
+  (matches rose 61 -> 325 vs C1). Independently re-verified by a full pipeline
+  re-run: rmse_px=22.6605, 223/325, ratio 0.6862 reproduced exactly.
 - [x] **2.2** `src/preprocessing/normalize.py`: implement CLAHE with
   `cv2.createCLAHE`. Run with `clipLimit` values `2.0`, `4.0`, and `8.0`, each on an
   `8x8` tile grid. Select the `clipLimit` with the lowest RMSE. Run the full
   pipeline with that setting as Config C3. Append the C3 row, and also log the
   RMSE for all three `clipLimit` trials to `results/logs/clahe_sweep.csv`.
   RESULT: pass — results/logs/clahe_sweep.csv (3 rows: clip 2.0 -> 23.0273,
-  4.0 -> 22.6316, 8.0 -> 22.6496); best clipLimit=4.0; C3 = georef+clahe:4.0:
-  rmse_px=22.6316, inliers=236/286 (ratio 0.8252).
+  4.0 -> 22.6316, 8.0 -> 22.6496); best clipLimit=4.0 (lowest RMSE); C3 =
+  georef+clahe:4.0: rmse_px=22.6316, inliers=236/286 (ratio 0.8252). All three
+  trials and the C3 run re-verified by full pipeline re-runs (identical metrics;
+  only runtime varies run to run).
 - [x] **2.3** `src/preprocessing/shadow_correct.py`: implement gamma correction for
   shadow regions (gamma = 0.5). Run as Config C4. Append the C4 row.
   RESULT: pass (real measurement, algorithm degrades matching) — src/preprocessing/
@@ -259,11 +262,20 @@ to `results/logs/ablation.csv`.
   georef+gamma_shadow:0.5: rmse_px=8353.4457, inliers=6/40 (ratio 0.15). The sharp
   shadow mask creates intensity discontinuities / spurious edges in dark terrain,
   collapsing SIFT matches (40). Recorded as-is; C2/C3 clearly outperform C4 and are
-  used by Phase 3; not tuned further per no-tuning rule.
+  used by Phase 3; not tuned further per no-tuning rule. Verified as GENUINE (not an
+  evaluation/convention bug): same 1024x1024 crops and GT file/convention as C1-C3,
+  H is finite but wrong (6/40 speculative inliers -> GT residuals up to ~29610 px);
+  the same evaluation on a good H yields the sane ~22.6 px. Re-run reproduced
+  rmse_px=8353.4457 exactly.
 - **Verify**: `results/logs/ablation.csv` has rows C1–C4, each with real measured
   numbers. `results/logs/clahe_sweep.csv` has 3 rows.
   VERIFY: pass — ablation.csv rows C1..C4 all numeric (rmse/inliers/ratio/matches/
-  time); clahe_sweep.csv has exactly 3 rows (clip 2.0/4.0/8.0).
+  time), C1 row byte-identical to the Phase 1 verified baseline, single row per
+  config (no duplicates); clahe_sweep.csv has exactly 3 rows (clip 2.0/4.0/8.0).
+  Full independent re-run of C2+C3+C4 and all three CLAHE trials reproduced every
+  metric value; inlier ratio = inliers/matches for every row; RMSE always computed
+  from data/ground_truth/pair1_gt.csv via the same metrics.rmse procedure; only
+  runtime varies (actual measured).
 
 ---
 

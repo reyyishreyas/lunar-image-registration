@@ -1,5 +1,5 @@
 config_id,preproc,detector,matcher,outlier,refinement,rmse_px,inliers,inlier_ratio,n_matches,time_s,georef_s
 C1,georef+normalize (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6614,56,0.918,61,0.88,0.0
-C2,georef+histmatch (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6605,223,0.6862,325,2.68,0.0
-C3,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6316,236,0.8252,286,1.03,0.0
-C4,georef+gamma_shadow:0.5 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,8353.4457,6,0.15,40,1.74,0.0
+C2,georef+histmatch (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6605,223,0.6862,325,2.02,0.0
+C3,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6316,236,0.8252,286,0.9,0.0
+C4,georef+gamma_shadow:0.5 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,8353.4457,6,0.15,40,1.06,0.0
