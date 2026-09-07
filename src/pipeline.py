@@ -52,6 +52,39 @@ def maybe_georeference(cfg):
     return meta
 
 
+def apply_normalize(src, ref, ncfg):
+    """Apply the config's normalization stage to the pair before detection.
+
+    Args:
+        src, ref: uint8 grayscale crops.
+        ncfg: config dict under top-level key "normalize" (empty if unset).
+
+    Returns:
+        (normalized_src, normalized_ref, label): label is a short string for the
+        ablation row's preproc column.
+    """
+    if not ncfg.get("enabled", False):
+        return src, ref, "raw"
+    method = ncfg.get("method", "")
+    if method == "histogram_match":
+        from src.preprocessing.normalize import histogram_match
+        return histogram_match(src, ref), ref, "histmatch"
+    if method == "clahe":
+        from src.preprocessing.normalize import apply_clahe
+        clip = float(ncfg.get("clip_limit", 2.0))
+        tile = int(ncfg.get("tile_grid", 8))
+        return (apply_clahe(src, clip_limit=clip, tile_grid=tile),
+                apply_clahe(ref, clip_limit=clip, tile_grid=tile),
+                f"clahe:{clip}")
+    if method == "gamma_shadow":
+        from src.preprocessing.shadow_correct import gamma_shadow_correct
+        gamma = float(ncfg.get("gamma", 0.5))
+        return (gamma_shadow_correct(src, gamma=gamma),
+                gamma_shadow_correct(ref, gamma=gamma),
+                f"gamma_shadow:{gamma}")
+    raise ValueError(f"unknown normalize method {method!r}")
+
+
 def run_experiment(config_path, verbose=True):
     with open(_abs(config_path)) as fh:
         cfg = yaml.safe_load(fh)
@@ -63,6 +96,8 @@ def run_experiment(config_path, verbose=True):
 
     fmt = cfg["inputs"]
     src, ref = load_pair(fmt["src"], fmt["ref"])
+
+    src, ref, norm_label = apply_normalize(src, ref, cfg.get("normalize", {}))
 
     det_cfg = cfg["detector"]
     if det_cfg.get("name") == "sift":
@@ -113,9 +148,10 @@ def run_experiment(config_path, verbose=True):
         rmse_px = round(rmse_px, 4)
 
     t_total = time.time() - t_start
+    preproc = f"georef+{norm_label}" if norm_label != "raw" else "georef"
     row = {
         "config_id": cfg.get("experiment", {}).get("id", "C1"),
-        "preproc": f"georef+normalize (crop {src.shape[1]}x{src.shape[0]})",
+        "preproc": f"{preproc} (crop {src.shape[1]}x{src.shape[0]})",
         "detector": det_cfg.get("name", ""),
         "matcher": f"{m_cfg.get('name')}:{m_cfg.get('ratio', 0.75)}",
         "outlier": f"{or_cfg.get('name')}:{or_cfg.get('ransac_thresh', 5.0)}",
@@ -144,7 +180,7 @@ def run_experiment(config_path, verbose=True):
     _append_ablation(row, cfg)
 
     if verbose:
-        print("\n===== C1 results =====")
+        print(f"\n===== {row['config_id']} results =====")
         for k, v in row.items():
             print(f"  {k}: {v}")
         print("matches fig:", out_cfg["matches_figure"])

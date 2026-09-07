@@ -1,0 +1,87 @@
+# Phase 2 Summary — Preprocessing (Configs C2–C4)
+
+## 1. Phase number and name
+**Phase 2 — Preprocessing (Configs C2–C4)**
+
+## 2. Steps completed (with result lines)
+
+| Checkbox | Step | Result |
+|---|---|---|
+| [x] | 2.1 histogram matching | pass — src/preprocessing/normalize.py (histogram_match); C2 re-verified by full pipeline re-run |
+| [x] | 2.2 CLAHE sweep + selection | pass — clahe_sweep.csv 3 rows; best clipLimit=4.0 by lowest RMSE; C3 run twice, identical metrics |
+| [x] | 2.3 gamma shadow correction | pass (real measurement; degrades matching) — C4 recorded as-is, verified genuine |
+| VERIFY | — | pass — C1 row byte-identical to Phase 1 baseline; C1-C4 numeric; clahe_sweep.csv 3 rows; ratios math-checked; RMSE from real GT |
+
+## 3. Complete C1–C4 table (FINAL verified values)
+| Config | Preprocessing | RMSE (px) | Inliers | Inlier ratio | Matches | Runtime (s) |
+|---|---|---|---|---|---|---|
+| C1 | georef (+ normalize, Phase 1 baseline) | 22.6614 | 56 | 0.918 | 61 | 0.88 |
+| C2 | georef + histogram matching | 22.6605 | 223 | 0.6862 | 325 | 2.02 |
+| C3 | georef + CLAHE clipLimit=4.0, 8x8 | 22.6316 | 236 | 0.8252 | 286 | 0.90 |
+| C4 | georef + gamma shadow correction γ=0.5 | 8353.4457 | 6 | 0.15 | 40 | 1.06 |
+
+C1 row is the immutable Phase 1 verified baseline (not regenerated). C2/C3/C4 rows are from fresh
+full-pipeline re-runs; all metric values reproduced exactly (runtimes are the actual measured times
+of those runs and vary run to run).
+
+## 4. Complete CLAHE sweep table (FINAL verified values)
+| clipLimit | tile grid | RMSE (px) | Inliers | Inlier ratio | Matches | Runtime (s) |
+|---|---|---|---|---|---|---|
+| 2.0 | 8x8 | 23.0273 | 154 | 0.7662 | 201 | 1.58 |
+| **4.0** | **8x8** | **22.6316** | **236** | **0.8252** | **286** | **1.39** |
+| 8.0 | 8x8 | 22.6496 | 241 | 0.7651 | 315 | 1.66 |
+
+## 5. Selected best preprocessing configuration
+**Config C3: georef + CLAHE, clipLimit = 4.0, tileGridSize = (8, 8)**
+
+## 6. Why it was selected
+Strictly by lowest RMSE among the three required CLAHE trials (2.0 -> 23.0273, 4.0 -> 22.6316,
+8.0 -> 22.6496); 4.0 wins on RMSE. (RMSE is the primary accuracy metric; inlier count/ratio are
+reported as required experimental metrics but were NOT the selection criterion.) C3 is also the
+best available Phase 2 preprocessing overall: 22.6316 px beats C1 (22.6614) and C2 (22.6605), and
+is far better than C4.
+
+## 7. Files created or modified
+- `src/preprocessing/normalize.py` (histogram_match, apply_clahe)
+- `src/preprocessing/shadow_correct.py` (gamma_shadow_correct)
+- `src/pipeline.py` (apply_normalize stage, method-aware preproc label, config-aware result header)
+- `configs/experiment_C2.yaml`, `configs/experiment_C3.yaml`, `configs/experiment_C4.yaml`
+- `AI_EXECUTION_PLAN.md` (Phase 2 checkboxes + RESULT/VERIFY lines)
+- `results/logs/ablation.csv` (canonical C1-C4, rebuilt from verified re-runs)
+- `results/logs/clahe_sweep.csv` (canonical 3-trial sweep with full reproducibility columns)
+- `results/logs/phase2_worklog.md`, `results/logs/phase2_summary.md`
+- `results/figures/pair1_matches_C2.png`, `pair1_matches_C3.png`, `pair1_matches_C4.png`
+
+## 8. Failures / deviations
+- **C4 is a recorded numeric failure, not a blocked step.** Gamma shadow correction (50%-quantile
+  hard mask, gamma 0.5) collapses SIFT matching (40 matches, 6 inliers) -> RMSE 8353.4457 px.
+  C4 kept (not removed, not tuned). C2/C3 carry forward to Phase 3.
+- **Runtime values vary between runs** (CPU scheduling / FUSE-mounted volume reads); every other
+  metric is deterministic and was reproduced exactly. No source of nondeterminism affects scores.
+- The only intentionally empty field is the `refinement` column (Phase 4 adds refinement).
+
+## 9. Verification results
+- C1 row byte-identical to the committed Phase 1 baseline (C1 not regenerated).
+- data/ground_truth/pair1_gt.csv byte-identical (sha1 10739fb6...) and used by all four configs
+  through the same metrics.rmse procedure and coordinate convention (x1,y1 in pair1_src.png;
+  x2,y2 in pair1_ref.png; both 1024x1024).
+- Same pair/crop used: data/processed/pair1_src.png + pair1_ref.png (georef skipped as they exist).
+- Full re-runs (actual pipeline, actual YAML) reproduced: C2 22.6605/223/0.6862/325;
+  C3 22.6316/236/0.8252/286 (twice); C4 8353.4457/6/0.15/40; sweep 23.0273/154, 22.6316/236,
+  22.6496/241.
+- Inlier ratio = inliers/matches verified for every row: 56/61=0.918, 223/325=0.6862,
+  236/286=0.8252, 6/40=0.15, 154/201=0.7662, 241/315=0.7651.
+- No NaN/blank/placeholder values in any numeric field; no fabrication; values not copied from
+  expectations (all obtained by re-run).
+- C4 huge RMSE verified genuine: same crops/GT/convention, H finite but wrong (RANSAC locked
+  6/40 speculative inliers; GT residuals span 73.5..29610 px); identical evaluation on C3's good
+  H gives 22.6316 px on the same GT.
+- All required output paths exist; figures regenerated byte-identically (deterministic drawing).
+- git diff inspected: only ablation.csv (runtime updates) and clahe_sweep.csv (reproducibility
+  columns) changed; no source-code or GT changes.
+
+## 10. Deliverables from Section 1 satisfied
+- Config C2 (histogram matching), C3 (CLAHE best-of-sweep by RMSE), C4 (gamma shadow) each
+  appended as real measured rows to results/logs/ablation.csv; clahe_sweep.csv records all three
+  required trials with full reproducibility info; single pipeline entry point extended via
+  apply_normalize (config-driven), no competing pipeline logic.
