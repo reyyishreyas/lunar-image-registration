@@ -390,20 +390,37 @@ to `results/logs/ablation.csv`.
 
 ## 7. Phase 5 — Polar / low-sun-angle hard case
 
-- [ ] **5.1** Run the exact `FINAL_CONFIG` pipeline from Phase 4, unchanged, on the
+- [x] **5.1** Run the exact `FINAL_CONFIG` pipeline from Phase 4, unchanged, on the
   `role=phase5` pair identified in Step 0.3.
-- [ ] **5.2** Append the result to `results/logs/ablation.csv` as
+  RESULT: pass — ran `configs/experiment_C9_polar.yaml` (algorithm blocks
+  byte-identical to FINAL_CONFIG/C10; only I/O paths + georef prefix differ).
+  Pair: OHRC-2026 (12000x93692, sun_el ~1.9 deg) + LRO NAC M1127547939RC.
+  Classical georeference FAILED (14 SIFT inliers < 20 threshold) before any crop
+  was produced — no homography.
+- [x] **5.2** Append the result to `results/logs/ablation.csv` as
   `C9 (polar test)`, with real RMSE/inlier numbers or an explicit failure note if
   the pipeline cannot produce a homography (e.g. `RMSE=FAIL, inliers=0,
   notes=insufficient matches after RANSAC`). A failure result is a completed,
   required deliverable — it must be logged, not omitted.
-- [ ] **5.3** If SuperGlue/LoFTR still produces usable matches on this pair while
+  RESULT: pass — appended C9 row: rmse_px=FAIL, inliers=0, inlier_ratio=0,
+  n_matches=0, time_s=37.9, notes=georeference: no reliable OHRC<->NAC overlap
+  (inliers=14). No RMSE computable: no manual GT exists for this pair.
+- [x] **5.3** If SuperGlue/LoFTR still produces usable matches on this pair while
   classical methods fail, record this explicitly in
   `results/logs/polar_case_findings.md` — this becomes the lead differentiation
   slide in the presentation deck (Phase 6, Step 6.3).
+  RESULT: pass — negative result recorded. Learned methods do NOT rescue the
+  pair: SuperPoint+SuperGlue produced only 2 matches; LoFTR (resized 832x832)
+  produced 419 matches but only 9 inliers (2.1%) vs SIFT baseline 14. ALL
+  matchers fail at the georeference/overlap-search stage -> no Phase 6
+  differentiation slide from this pair; documented terminal-cause analysis and
+  where to target Phase 6 instead.
 - **Verify**: `results/logs/ablation.csv` contains the C9 row, and
   `results/logs/polar_case_findings.md` exists with at least the pass/fail outcome
   and one sentence of explanation.
+  RESULT: pass — C9 (polar test) row present in ablation.csv (rmse_px=FAIL,
+  notes=...); `results/logs/polar_case_findings.md` exists with per-method
+  inlier table, caveat, and terminal-cause conclusion (2 methods).
 
 ---
 

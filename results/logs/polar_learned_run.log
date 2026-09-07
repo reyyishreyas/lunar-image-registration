@@ -1,0 +1,5 @@
+OHRC ws shape (9370, 1200), NAC ws shape (6528, 633)
+Loaded SuperPoint model
+Loaded SuperPoint model
+Loaded SuperGlue model ("outdoor" weights)
+[SuperPoint+SuperGlue] 2 matches (<4) -> fail

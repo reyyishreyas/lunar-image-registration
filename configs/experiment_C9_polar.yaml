@@ -1,0 +1,53 @@
+# Phase 5 polar / low-sun-angle hard case (AI_EXECUTION_PLAN.md Step 5.1).
+#
+# Algorithm blocks are byte-identical to the Phase 4 FINAL_CONFIG (SIFT + CLAHE
+# 4.0 + BF ratio + USAC_MAGSAC). Only the I/O paths and the georeference prefix
+# differ because this runs on the second pair (OHRC-2026 + LRO NAC M1127547939RC,
+# sun_el 1.9 deg). Result appended to ablation.csv as C9 (polar test).
+experiment:
+  id: C9
+  pair: phase5
+  description: "Phase 5 polar/low-sun FINAL_CONFIG test: OHRC-2026 (el 1.9deg) + LRO NAC M1127547939RC"
+
+preprocessing:
+  enabled: true
+  prefix: phase5
+  ohrc_img: data/PATCH-004/OHRC/data/calibrated/20260331/ch2_ohr_ncp_20260331T1105235288_d_img_d18.img
+  ohrc_geometry: data/PATCH-004/OHRC/geometry/calibrated/20260331/ch2_ohr_ncp_20260331T1105235288_g_grd_d18.csv
+  nac_img: data/PATCH-004/LRO NAC/OHRC/M1127547939RC.IMG
+  out_dir: data/processed
+  crop_px: 1024
+  outputs:
+    src: data/processed/phase5_src.png
+    ref: data/processed/phase5_ref.png
+
+inputs:
+  src: data/processed/phase5_src.png
+  ref: data/processed/phase5_ref.png
+
+normalize:
+  enabled: true
+  method: clahe
+  clip_limit: 4.0
+  tile_grid: 8
+
+detector:
+  name: sift
+  nfeatures: 10000
+  contrast_threshold: 0.04
+  edge_threshold: 10
+
+matcher:
+  name: bf_ratio
+  ratio: 0.75
+
+outlier_rejection:
+  name: ransac
+  method: usac_magsac
+  ransac_thresh: 5.0
+
+ground_truth: ""
+
+outputs:
+  matches_figure: results/figures/phase5_matches_C9_polar.png
+  ablation_log: results/logs/ablation.csv

@@ -34,16 +34,28 @@ import warnings
 
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
-OHRC_SHAPE = (93693, 12000)  # (scan, pixel), uint8
+OHRC_SHAPE = (93693, 12000)  # (scan, pixel), uint8 — Phase 1 default; actual rows inferred from file size
+OHRC_WIDTH = 12000  # across-track pixels (constant across OHRC products)
 OHRC_WS_FACTOR = 10  # working-set downsampling factor for OHRC
 NAC_WS_FACTOR = 8  # working-set downsampling factor for LRO NAC
 
 
 def read_ohrc_raw(img_path: str) -> np.ndarray:
-    """Read the full raw OHRC .img as uint8 (scan, pixel)."""
+    """Read the full raw OHRC .img as uint8 (scan, pixel).
+
+    The across-track width is constant (12000 px); the along-track scan-line
+    count is inferred from the file size so products of different lengths (Phase
+    1: 93693, Phase 5: 93692) are read correctly.
+    """
+    size = os.path.getsize(img_path)
+    rows, rem = divmod(size, OHRC_WIDTH)
+    if rem != 0:
+        raise ValueError(
+            f"OHRC file size {size} is not divisible by {OHRC_WIDTH} px; "
+            f"unexpected product layout for {img_path}"
+        )
     arr = np.fromfile(img_path, dtype=np.uint8)
-    arr = arr.reshape(OHRC_SHAPE)
-    return arr
+    return arr.reshape(rows, OHRC_WIDTH)
 
 
 def read_ohrc_ground_grid(csv_path: str):
@@ -190,15 +202,19 @@ def find_pair_transform(ohrc_ws, nac, nac_fac=NAC_WS_FACTOR):
 
 
 def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
-                      crop_px=1024):
-    """Crop pair1 to 1024x1024 same-ground-area; write PNGs + JSON.
+                      crop_px=1024, prefix="pair1"):
+    """Crop a pair to 1024x1024 same-ground-area; write PNGs + JSON.
+
+    Outputs are named `{prefix}_src.png`, `{prefix}_ref.png` and
+    `georef_{prefix}.json` so several pairs (Phase 1 vs Phase 5 polar test) can
+    be processed without clobbering one another.
 
     Returns dict of outputs + derived NAC corner ground coords.
     """
     os.makedirs(out_dir, exist_ok=True)
 
     ohrc = read_ohrc_raw(ohrc_img_path)
-    ohrc_ws = ohrc[::OHRC_WS_FACTOR, ::OHRC_WS_FACTOR]  # (9369, 1200)
+    ohrc_ws = ohrc[::OHRC_WS_FACTOR, ::OHRC_WS_FACTOR]  # (~9369, 1200)
     nac = read_nac_img(nac_img_path)
     pix_axis, scan_axis, lon_grid, lat_grid = read_ohrc_ground_grid(ohrc_csv_path)
 
@@ -229,8 +245,8 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
     # ---- OHRC full-res crop ----
     p0 = int(round((cx - half) * OHRC_WS_FACTOR))
     s0 = int(round((cy - half) * OHRC_WS_FACTOR))
-    p0 = max(0, min(p0, OHRC_SHAPE[1] - crop_px))
-    s0 = max(0, min(s0, OHRC_SHAPE[0] - crop_px))
+    p0 = max(0, min(p0, ohrc.shape[1] - crop_px))
+    s0 = max(0, min(s0, ohrc.shape[0] - crop_px))
     src_crop = ohrc[s0:s0 + crop_px, p0:p0 + crop_px]
     del ohrc
     src_png = np.clip(src_crop.astype(np.float32) / 255.0, 0, 1)
@@ -269,8 +285,8 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
                                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
     # ---- Outputs ----
-    src_path = os.path.join(out_dir, "pair1_src.png")
-    ref_path = os.path.join(out_dir, "pair1_ref.png")
+    src_path = os.path.join(out_dir, f"{prefix}_src.png")
+    ref_path = os.path.join(out_dir, f"{prefix}_ref.png")
     cv2.imwrite(src_path, src_png)
     cv2.imwrite(ref_path, ref_crop)
 
@@ -299,7 +315,7 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
         "src_png": src_path,
         "ref_png": ref_path,
     }
-    with open(os.path.join(out_dir, "georef_pair1.json"), "w") as fh:
+    with open(os.path.join(out_dir, f"georef_{prefix}.json"), "w") as fh:
         json.dump(meta, fh, indent=2)
     return meta
 

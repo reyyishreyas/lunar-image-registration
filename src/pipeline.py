@@ -48,6 +48,7 @@ def maybe_georeference(cfg):
         nac_img_path=_abs(pre["nac_img"]),
         out_dir=_abs(out),
         crop_px=pre.get("crop_px", 1024),
+        prefix=pre.get("prefix", "pair1"),
     )
     return meta
 

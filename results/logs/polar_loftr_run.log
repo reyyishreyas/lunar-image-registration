@@ -1,0 +1,6 @@
+OHRC ws shape (9370, 1200), NAC ws shape (6528, 633)
+/Users/reyyishreyas/.mounty/New Volume/lunar-image-registration/third_party/LoFTR/src/loftr/utils/fine_matching.py:50: DeprecationWarning: Since kornia 0.8.3 the `create_meshgrid` is deprecated in favor of `kornia.geometry.create_meshgrid`.  The `kornia.utils` module has been removed. Import from `kornia.geometry` instead.
+  grid_normalized = create_meshgrid(W, W, True, heatmap.device).reshape(1, -1, 2)  # [1, WW, 2]
+Loaded SuperPoint model
+Loaded SuperPoint model
+[LoFTR (resized 832x832)] matches=419 inliers=9 ratio=0.021 t=30.1s -> FAIL (classical baseline 14)
