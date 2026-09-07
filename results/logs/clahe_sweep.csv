@@ -1,0 +1,4 @@
+clip_limit,tile_grid,rmse_px,inliers,n_matches
+2.0,8,23.0273,154,201
+4.0,8,22.6316,236,286
+8.0,8,22.6496,241,315

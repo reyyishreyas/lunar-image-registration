@@ -239,17 +239,31 @@ Run each of the following one at a time, re-running the full pipeline via
 `scripts/run_pipeline.py` after each addition and appending the corresponding row
 to `results/logs/ablation.csv`.
 
-- [ ] **2.1** `src/preprocessing/normalize.py`: implement histogram matching with
+- [x] **2.1** `src/preprocessing/normalize.py`: implement histogram matching with
   `skimage.exposure.match_histograms`. Run as Config C2. Append the C2 row.
-- [ ] **2.2** `src/preprocessing/normalize.py`: implement CLAHE with
+  RESULT: pass — src/preprocessing/normalize.py (histogram_match); C2 =
+  georef+histmatch (OHRC crop -> NAC histogram): rmse_px=22.6605, inliers=223/325
+  (matches rose 61 -> 325 vs C1).
+- [x] **2.2** `src/preprocessing/normalize.py`: implement CLAHE with
   `cv2.createCLAHE`. Run with `clipLimit` values `2.0`, `4.0`, and `8.0`, each on an
   `8x8` tile grid. Select the `clipLimit` with the lowest RMSE. Run the full
   pipeline with that setting as Config C3. Append the C3 row, and also log the
   RMSE for all three `clipLimit` trials to `results/logs/clahe_sweep.csv`.
-- [ ] **2.3** `src/preprocessing/shadow_correct.py`: implement gamma correction for
+  RESULT: pass — results/logs/clahe_sweep.csv (3 rows: clip 2.0 -> 23.0273,
+  4.0 -> 22.6316, 8.0 -> 22.6496); best clipLimit=4.0; C3 = georef+clahe:4.0:
+  rmse_px=22.6316, inliers=236/286 (ratio 0.8252).
+- [x] **2.3** `src/preprocessing/shadow_correct.py`: implement gamma correction for
   shadow regions (gamma = 0.5). Run as Config C4. Append the C4 row.
+  RESULT: pass (real measurement, algorithm degrades matching) — src/preprocessing/
+  shadow_correct.py (gamma_shadow_correct, 50%-quantile shadow mask); C4 =
+  georef+gamma_shadow:0.5: rmse_px=8353.4457, inliers=6/40 (ratio 0.15). The sharp
+  shadow mask creates intensity discontinuities / spurious edges in dark terrain,
+  collapsing SIFT matches (40). Recorded as-is; C2/C3 clearly outperform C4 and are
+  used by Phase 3; not tuned further per no-tuning rule.
 - **Verify**: `results/logs/ablation.csv` has rows C1–C4, each with real measured
   numbers. `results/logs/clahe_sweep.csv` has 3 rows.
+  VERIFY: pass — ablation.csv rows C1..C4 all numeric (rmse/inliers/ratio/matches/
+  time); clahe_sweep.csv has exactly 3 rows (clip 2.0/4.0/8.0).
 
 ---
 

@@ -1,0 +1,45 @@
+experiment:
+  id: C3
+  pair: phase1
+  description: "Preprocess: CLAHE clipLimit=4.0 tile=8x8 (lowest-RMSE trial) + SIFT + BF ratio + RANSAC"
+
+preprocessing:
+  enabled: true
+  ohrc_img: data/PATCH-001/data/OHRC/ch2_ohr_ncp_20210405T1606536730_d_img_d18/data/calibrated/20210405/ch2_ohr_ncp_20210405T1606536730_d_img_d18.img
+  ohrc_geometry: data/PATCH-001/data/OHRC/ch2_ohr_ncp_20210405T1606536730_d_img_d18/geometry/calibrated/20210405/ch2_ohr_ncp_20210405T1606536730_g_grd_d18.csv
+  nac_img: data/PATCH-001/data/LRO_NAC/LC/M1469248775LC.IMG
+  out_dir: data/processed
+  crop_px: 1024
+  outputs:
+    src: data/processed/pair1_src.png
+    ref: data/processed/pair1_ref.png
+
+inputs:
+  src: data/processed/pair1_src.png
+  ref: data/processed/pair1_ref.png
+
+normalize:
+  enabled: true
+  method: clahe
+  clip_limit: 4.0
+  tile_grid: 8
+
+detector:
+  name: sift
+  nfeatures: 10000
+  contrast_threshold: 0.04
+  edge_threshold: 10
+
+matcher:
+  name: bf_ratio
+  ratio: 0.75
+
+outlier_rejection:
+  name: ransac
+  ransac_thresh: 5.0
+
+ground_truth: data/ground_truth/pair1_gt.csv
+
+outputs:
+  matches_figure: results/figures/pair1_matches_C3.png
+  ablation_log: results/logs/ablation.csv
