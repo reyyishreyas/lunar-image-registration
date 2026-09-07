@@ -165,17 +165,49 @@ def run_experiment(config_path, verbose=True):
         raise ValueError(f"unknown matcher {m_cfg.get('name')}")
 
     or_cfg = cfg["outlier_rejection"]
+    if or_cfg.get("grid_uniform"):
+        from src.outlier_rejection.grid_uniform import cap_by_grid
+
+        gcfg = or_cfg["grid_uniform"]
+        matches = cap_by_grid(
+            matches, kp1, src.shape,
+            rows=gcfg.get("rows", 4), cols=gcfg.get("cols", 4),
+            max_per_cell=gcfg.get("max_per_cell"),
+            max_total=gcfg.get("max_total"))
     if or_cfg.get("name") == "ransac":
         from src.outlier_rejection.ransac import find_homography_ransac
 
         pts1 = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 2)
         pts2 = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 2)
-        H, inlier_mask = find_homography_ransac(pts1, pts2,
-                                                ransac_thresh=or_cfg.get("ransac_thresh", 5.0))
+        H, inlier_mask = find_homography_ransac(
+            pts1, pts2,
+            ransac_thresh=or_cfg.get("ransac_thresh", 5.0),
+            method=or_cfg.get("method", "ransac"))
         inliers = int(inlier_mask.sum())
         ratio = inliers / len(matches) if len(matches) else 0.0
     else:
         raise ValueError(f"unknown outlier rejection {or_cfg.get('name')}")
+
+    ref_cfg = cfg.get("refinement", {})
+    refinement_label = ""
+    if ref_cfg.get("enabled", False):
+        method = ref_cfg.get("method", "")
+        win = int(ref_cfg.get("win_size", 5))
+        if method == "subpixel":
+            from src.refinement.subpixel import refine_corner_subpix
+
+            _, _, H = refine_corner_subpix(
+                src, ref, kp1, kp2, matches, inlier_mask, win_size=win)
+            refinement_label = "cornerSubPix"
+        elif method == "phase_correlation":
+            from src.refinement.phase_correlation import refine_phase_correlation
+
+            _, _, H = refine_phase_correlation(
+                src, ref, kp1, kp2, matches, inlier_mask,
+                radius=int(ref_cfg.get("radius", 6)))
+            refinement_label = "phase_corr"
+        else:
+            raise ValueError(f"unknown refinement method {method!r}")
 
     out_cfg = cfg["outputs"]
     from src.evaluation.visualize import draw_matches
@@ -203,7 +235,7 @@ def run_experiment(config_path, verbose=True):
         "detector": det_cfg.get("name", ""),
         "matcher": f"{m_cfg.get('name')}:{_matcher_thresh}",
         "outlier": f"{or_cfg.get('name')}:{or_cfg.get('ransac_thresh', 5.0)}",
-        "refinement": "",
+        "refinement": refinement_label,
         "rmse_px": rmse_px,
         "inliers": inliers,
         "inlier_ratio": round(ratio, 4),

@@ -7,3 +7,7 @@ C5,georef+clahe:4.0 (crop 1024x1024),akaze,bf_ratio:0.75,ransac:5.0,,22.8034,793
 C6,georef+clahe:4.0 (crop 1024x1024),rift2,rift2:0.95,ransac:5.0,,500.4704,193,0.2144,900,32.69,0.0
 C7,georef+clahe:4.0 (crop 1024x1024),superpoint,superglue:0.2,ransac:5.0,,22.6703,137,0.5983,229,10.43,0.0
 C8,georef+clahe:4.0 (crop 1024x1024),superpoint,loftr:0.2,ransac:5.0,,22.6557,4583,0.673,6810,38.97,0.0
+C9,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6386,114,0.8085,141,4.11,0.0
+C10,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6172,235,0.8217,286,6.73,0.11
+C11,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,cornerSubPix,22.65,235,0.8217,286,1.53,0.0
+C12,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,phase_corr,22.6379,235,0.8217,286,8.95,0.0

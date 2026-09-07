@@ -1,0 +1,4 @@
+config_id,grid,max_per_cell,rmse_px,inliers,inlier_ratio,n_matches,time_s
+GRID4x4,4x4,13,22.6754,153,0.8053,190,7.46
+GRID8x8,8x8,4,22.648,149,0.7842,190,1.79
+GRID16x16,16x16,1,22.6386,114,0.8085,141,1.12

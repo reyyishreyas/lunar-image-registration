@@ -1,20 +1,7 @@
-# FINAL_CONFIG — best configuration from Phase 4 ablation (AI_EXECUTION_PLAN.md).
-#
-# Selected config: C10 = SIFT + CLAHE(4.0, 8x8) + BF ratio(0.75) + USAC_MAGSAC(5.0).
-# RMSE 22.6172 px (best of C1-C12). Verified reproducible (two identical runs).
-#
-# Phase 4 measured findings:
-#   - Grid-uniform match capping (C9, best grid 16x16) slightly RAISED RMSE (22.6386 vs
-#     C3 22.6316) on this pair; recorded, not selected.
-#   - cornerSubPix (C11, 22.6500) and phase_cross_correlation (C12, 22.6379) sub-pixel
-#     refinement of inlier points did not lower RMSE below unrefined MAGSAC (C10 22.6172);
-#     the ~22.6 px residual is dominated by the GT/georeferencing bias, not by sub-pixel
-#     point localization. Recorded, not selected.
-#   - USAC_MAGSAC (C10) improved RMSE over plain RANSAC (C3 22.6316) and IS selected.
 experiment:
-  id: FINAL
+  id: C11
   pair: phase1
-  description: "FINAL_CONFIG (Phase 4 best = C10): SIFT + CLAHE 4.0 + BF ratio + USAC_MAGSAC"
+  description: "cornerSubPix refinement of inliers on top of C10: SIFT + CLAHE 4.0 + MAGSAC + cornerSubPix"
 
 preprocessing:
   enabled: true
@@ -52,8 +39,13 @@ outlier_rejection:
   method: usac_magsac
   ransac_thresh: 5.0
 
+refinement:
+  enabled: true
+  method: subpixel
+  win_size: 5
+
 ground_truth: data/ground_truth/pair1_gt.csv
 
 outputs:
-  matches_figure: results/figures/pair1_matches_FINAL.png
+  matches_figure: results/figures/pair1_matches_C11.png
   ablation_log: results/logs/ablation.csv
