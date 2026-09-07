@@ -18,3 +18,9 @@ pyyaml
 tqdm
 streamlit
 jupyter
+
+# Phase 3: learned matchers (SuperPoint/SuperGlue via magicleap repo, LoFTR via zju3dv repo).
+# LoFTR and SuperGlue require fixed-version torch installs; these run with our venv torch (CPU).
+kornia
+einops
+yacs

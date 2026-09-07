@@ -107,6 +107,27 @@ def run_experiment(config_path, verbose=True):
                                                        if k != "name"})
         kp2, d2 = detect_sift(ref, verbose=verbose, **{k: v for k, v in det_cfg.items()
                                                        if k != "name"})
+    elif det_cfg.get("name") == "akaze":
+        from src.detection.classical import detect_akaze
+
+        kp1, d1 = detect_akaze(src, verbose=verbose, **{k: v for k, v in det_cfg.items()
+                                                        if k != "name"})
+        kp2, d2 = detect_akaze(ref, verbose=verbose, **{k: v for k, v in det_cfg.items()
+                                                        if k != "name"})
+    elif det_cfg.get("name") == "rift2":
+        from src.detection.rift2 import detect_rift2
+
+        kp1, d1 = detect_rift2(src, verbose=verbose, **{k: v for k, v in det_cfg.items()
+                                                        if k != "name"})
+        kp2, d2 = detect_rift2(ref, verbose=verbose, **{k: v for k, v in det_cfg.items()
+                                                        if k != "name"})
+    elif det_cfg.get("name") == "superpoint":
+        from src.detection.learned import detect_superpoint
+
+        kp1, d1 = detect_superpoint(src, verbose=verbose, **{k: v for k, v in det_cfg.items()
+                                                             if k != "name"})
+        kp2, d2 = detect_superpoint(ref, verbose=verbose, **{k: v for k, v in det_cfg.items()
+                                                             if k != "name"})
     else:
         raise ValueError(f"unknown detector {det_cfg.get('name')}")
 
@@ -114,7 +135,32 @@ def run_experiment(config_path, verbose=True):
     if m_cfg.get("name") == "bf_ratio":
         from src.matching.classical_match import match_bf_ratio
 
-        matches = match_bf_ratio(d1, d2, ratio=m_cfg.get("ratio", 0.75), verbose=verbose)
+        norm = {"l2": cv2.NORM_L2, "hamming": cv2.NORM_HAMMING}.get(
+            m_cfg.get("norm", "l2"), cv2.NORM_L2)
+        matches = match_bf_ratio(d1, d2, ratio=m_cfg.get("ratio", 0.75),
+                                 norm_type=norm, verbose=verbose)
+    elif m_cfg.get("name") == "rift2":
+        from src.detection.rift2 import match_rift2_nn
+
+        matches = match_rift2_nn(
+            kp1, d1, kp2, d2,
+            lowes_ratio=m_cfg.get("lowes_ratio", 0.95),
+            mutual=m_cfg.get("mutual", False), verbose=verbose)
+    elif m_cfg.get("name") == "superglue":
+        from src.matching.learned_match import match_superglue
+
+        matches = match_superglue(
+            kp1, d1, kp2, d2,
+            weights=m_cfg.get("weights", "outdoor"),
+            match_threshold=m_cfg.get("match_threshold", 0.2),
+            sinkhorn_iterations=m_cfg.get("sinkhorn_iterations", 20),
+            verbose=verbose)
+    elif m_cfg.get("name") == "loftr":
+        from src.matching.learned_match import match_loftr
+
+        matches = match_loftr(
+            kp1, d1, kp2, d2,
+            weights=m_cfg.get("weights", "outdoor"), verbose=verbose)
     else:
         raise ValueError(f"unknown matcher {m_cfg.get('name')}")
 
@@ -149,11 +195,13 @@ def run_experiment(config_path, verbose=True):
 
     t_total = time.time() - t_start
     preproc = f"georef+{norm_label}" if norm_label != "raw" else "georef"
+    _matcher_thresh = (m_cfg.get("ratio", m_cfg.get("lowes_ratio",
+                                                    m_cfg.get("match_threshold", 0.75))))
     row = {
         "config_id": cfg.get("experiment", {}).get("id", "C1"),
         "preproc": f"{preproc} (crop {src.shape[1]}x{src.shape[0]})",
         "detector": det_cfg.get("name", ""),
-        "matcher": f"{m_cfg.get('name')}:{m_cfg.get('ratio', 0.75)}",
+        "matcher": f"{m_cfg.get('name')}:{_matcher_thresh}",
         "outlier": f"{or_cfg.get('name')}:{or_cfg.get('ransac_thresh', 5.0)}",
         "refinement": "",
         "rmse_px": rmse_px,

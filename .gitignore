@@ -26,3 +26,14 @@ results/logs/*
 
 .env
 ._*
+
+# Phase 3 vendored third-party pretrained weights + sample media (re-downloadable;
+# URLs logged in results/logs/phase3_summary.md). Keeps the repo lean while the
+# adapters in src/ remain committed.
+third_party/**/weights/*
+third_party/**/models/weights/*
+third_party/SuperGluePretrainedNetwork/assets/*
+third_party/LoFTR/assets/*
+third_party/LoFTR/data/*
+third_party/RIFT2-python/images/*
+!third_party/**/[!._]*.py
