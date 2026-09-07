@@ -133,6 +133,12 @@ def run_experiment(config_path, verbose=True):
         raise ValueError(f"unknown detector {det_cfg.get('name')}")
 
     m_cfg = cfg["matcher"]
+    fallback_enabled = m_cfg.get("learned_fallback", False)
+
+    def _too_few(m):
+        return m is None or len(m) < 8
+
+    matches = None
     if m_cfg.get("name") == "bf_ratio":
         from src.matching.classical_match import match_bf_ratio
 
@@ -164,6 +170,40 @@ def run_experiment(config_path, verbose=True):
             weights=m_cfg.get("weights", "outdoor"), verbose=verbose)
     else:
         raise ValueError(f"unknown matcher {m_cfg.get('name')}")
+
+    if fallback_enabled and _too_few(matches):
+        # Emergency fallback: the classical matcher gave <8 matches. If the
+        # learned (SuperPoint) cache is populated, try LoFTR / SuperGlue to
+        # rescue an overlapping-but-feature-sparse pair. LoFTR/SuperGlue read
+        # the global SuperPoint cache, so this only works when the detector was
+        # `superpoint` (which is the intended companion detector).
+        from src.detection.learned import _cache as sp_cache
+        if sp_cache["src"] is not None and sp_cache["ref"] is not None:
+            if verbose:
+                print("[pipeline] classical matcher gave too few matches; "
+                      "trying learned fallback (LoFTR/SuperGlue)")
+            from src.matching.learned_match import match_loftr, match_superglue
+            for name, fn in (("loftr", match_loftr), ("superglue", match_superglue)):
+                try:
+                    if name == "loftr":
+                        m = fn(kp1, d1, kp2, d2, weights="outdoor", verbose=False)
+                    else:
+                        m = fn(kp1, d1, kp2, d2, weights="outdoor",
+                               match_threshold=m_cfg.get("match_threshold", 0.2),
+                               verbose=False)
+                except Exception as _e:
+                    if verbose:
+                        print(f"[pipeline]   learned {name} failed: {_e}")
+                    continue
+                if _too_few(m):
+                    continue
+                matches = m
+                m_cfg["_fallback_used"] = True
+                break
+        else:
+            if verbose:
+                print("[pipeline] learned fallback skipped: SuperPoint cache "
+                      "empty (detector is not superpoint)")
 
     or_cfg = cfg["outlier_rejection"]
     if or_cfg.get("grid_uniform"):

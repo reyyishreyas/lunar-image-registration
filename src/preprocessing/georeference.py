@@ -120,6 +120,92 @@ def _prep_sift(im: np.ndarray) -> np.ndarray:
     return cv2.createCLAHE(clipLimit=3.0, tileGridSize=(32, 32)).apply(im)
 
 
+def _ncc_overlap(H, nn, mask_nn, b):
+    """Normalized cross-correlation of the warped nn over the OHRC working image.
+
+    Returns (ncc, overlap_bbox) where bbox is [x_min, y_min, x_max, y_max] of the
+    overlap in OHRC working-set pixel space (None if too little overlap).
+    """
+    Hinv = np.linalg.inv(H)
+    warped = cv2.warpPerspective(nn, Hinv, (b.shape[1], b.shape[0]),
+                                 flags=cv2.INTER_LINEAR,
+                                 borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    wmask = cv2.warpPerspective(mask_nn, Hinv, (b.shape[1], b.shape[0]),
+                                flags=cv2.INTER_NEAREST,
+                                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    ok = (wmask > 0.5) & (b > 0)
+    if ok.sum() < 2000:
+        return -1.0, None
+    x = b[ok].astype(np.float32)
+    y = warped[ok].astype(np.float32)
+    x = (x - x.mean()) / (x.std() + 1e-6)
+    y = (y - y.mean()) / (y.std() + 1e-6)
+    ys, xs = np.where(wmask > 0.5)
+    bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
+    return float((x * y).mean()), bbox
+
+
+def candidate_stats(ohrc_ws, nac, nac_fac=NAC_WS_FACTOR, nfeatures=15000,
+                    contrast_threshold=0.01, edge_threshold=10,
+                    ratio=0.75, ransac_thresh=5.0):
+    """Run the 4-orientation SIFT overlap search and return per-flip statistics.
+
+    Returns a dict {candidates: [...], sift_params: {...}}. Each candidate holds
+    flip, good, inliers, inlier_ratio, ncc, bbox. Pure function used by both the
+    primary search (find_pair_transform) and the robust fallback, and dumped to
+    georef diagnostics on failure.
+    """
+    b = _prep_sift(ohrc_ws)
+    sub = nac[::nac_fac, ::nac_fac]
+    lo, hi = np.nanpercentile(sub, [2, 98])
+    n8 = _normalize8(sub, lo, hi)
+    n8[np.isnan(sub)] = 0
+    n8_mask = (~np.isnan(sub)).astype(np.float32)
+
+    sift = cv2.SIFT_create(nfeatures=nfeatures, contrastThreshold=contrast_threshold,
+                           edgeThreshold=edge_threshold)
+    kpb, db = sift.detectAndCompute(b, None)
+    bfm = cv2.BFMatcher()
+
+    out = []
+    for name, flips in (("none", (False, False)), ("flipV", (True, False)),
+                        ("flipH", (False, True)), ("flipHV", (True, True))):
+        nn = n8
+        if flips[0]:
+            nn = np.flipud(nn)
+        if flips[1]:
+            nn = np.fliplr(nn)
+        kpn, dn = sift.detectAndCompute(_prep_sift(nn), None)
+        if dn is None or len(dn) < 8:
+            continue
+        raw = bfm.knnMatch(db, dn, k=2)
+        good = [m for m, z in raw if m.distance < ratio * z.distance]
+        if len(good) < 4:
+            out.append(dict(flip=name, good=len(good), inliers=0, inlier_ratio=0.0,
+                            ncc=-1.0, bbox=None))
+            continue
+        src = np.float32([kpb[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+        dst = np.float32([kpn[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        best = None
+        for method in (cv2.RANSAC, cv2.USAC_MAGSAC):
+            H, mask = cv2.findHomography(src, dst, method, ransac_thresh)
+            inl = int(mask.sum()) if mask is not None else 0
+            if best is None or inl > best[0]:
+                best = (inl, H, mask, method)
+        inl, H, mask, used = best
+        if H is None:
+            out.append(dict(flip=name, good=len(good), inliers=inl,
+                            inlier_ratio=inl / len(good), ncc=-1.0, bbox=None))
+            continue
+        ncc, bbox = _ncc_overlap(H, nn, n8_mask, b)
+        out.append(dict(flip=name, good=len(good), inliers=inl,
+                        inlier_ratio=inl / len(good), ncc=ncc, bbox=bbox))
+    return {"candidates": out,
+            "sift_params": dict(nfeatures=nfeatures, contrast_threshold=contrast_threshold,
+                                edge_threshold=edge_threshold, ratio=ratio,
+                                ransac_thresh=ransac_thresh, nac_fac=nac_fac)}
+
+
 def find_pair_transform(ohrc_ws, nac, nac_fac=NAC_WS_FACTOR):
     """Estimate mapping OHRC working-set -> NAC working-set.
 
@@ -179,9 +265,9 @@ def find_pair_transform(ohrc_ws, nac, nac_fac=NAC_WS_FACTOR):
         src = np.float32([kpb[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
         dst = np.float32([kpn[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
         H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
-        if mask is None:
+        if H is None:
             continue
-        inl = int(mask.sum())
+        inl = int(mask.sum()) if mask is not None else 0
         ncc = ncc_overlap(H, nn, n8_mask)
         candidates.append(dict(flip=name, H=H, inliers=inl, good=len(good),
                                ncc=ncc, nac_ws_shape=nn.shape, nac_fac=nac_fac))
@@ -201,30 +287,97 @@ def find_pair_transform(ohrc_ws, nac, nac_fac=NAC_WS_FACTOR):
     return best
 
 
-def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
-                      crop_px=1024, prefix="pair1"):
-    """Crop a pair to 1024x1024 same-ground-area; write PNGs + JSON.
+def find_pair_transform_robust(ohrc_ws, nac, nac_fac=NAC_WS_FACTOR,
+                               nfeatures=30000, contrast_threshold=0.006,
+                               edge_threshold=12, ratio=0.8):
+    """Boosted fallback overlap search with proof-based acceptance.
 
-    Outputs are named `{prefix}_src.png`, `{prefix}_ref.png` and
-    `georef_{prefix}.json` so several pairs (Phase 1 vs Phase 5 polar test) can
-    be processed without clobbering one another.
+    Used when the primary search finds <20 inliers. Runs the same 4-orientation
+    SIFT search with a denser extractor and USAC_MAGSAC, then ACCEPTS a
+    candidate only when it passes all of:
+      * winning-orientation inliers >= 20 and inlier ratio >= 0.25
+      * MIRROR-GROUP dominance: the winning orientation's flip-group
+        (id/HV = 0/180 deg rotation vs V/H = transpositions) must hold >= 2x the
+        inliers of the losing group. SIFT + craters are rotation-invariant, so a
+        genuine overlap produces a strong id/HV (or V/H) pair while the other
+        group stays near noise; on a truly non-overlapping pair every orientation
+        stays weak and no group dominates.
+      * warped-overlap NCC of the winner >= 0.15 (structural, not just
+        keypoint, agreement)
+      * overlap bbox is a sane sub-region (not the fully-degenerate whole frame)
 
-    Returns dict of outputs + derived NAC corner ground coords.
+    Returns (t_dict_or_None, stats). t-dict has same schema as
+    find_pair_transform; stats is the full candidate table used for the decision
+    (also written to diagnostics).
     """
+    stats = candidate_stats(ohrc_ws, nac, nac_fac=nac_fac, nfeatures=nfeatures,
+                            contrast_threshold=contrast_threshold,
+                            edge_threshold=edge_threshold, ratio=ratio)
+    cands = [c for c in stats["candidates"]]
+    if len(cands) < 2:
+        return None, stats
+
+    def _group(c):
+        return 0 if c["flip"] in ("none", "flipHV") else 1
+
+    by_group = {}
+    for c in cands:
+        by_group.setdefault(_group(c), []).append(c)
+    if len(by_group) < 2:
+        return None, stats
+    g_max = {}
+    for g, cs in by_group.items():
+        g_max[g] = max(cs, key=lambda c: (c["inliers"], c["ncc"]))
+    loser, winner = sorted(g_max.items(), key=lambda kv: kv[1]["inliers"])
+    win, lose = winner[1], loser[1]
+    if win["inliers"] < 20 or win["good"] == 0:
+        return None, stats
+    if (win["inliers"] / win["good"]) < 0.25:
+        return None, stats
+    if win["inliers"] < 2.0 * max(lose["inliers"], 1):
+        return None, stats
+    if win["ncc"] < 0.15 or win["bbox"] is None:
+        return None, stats
+    area = (win["bbox"][2] - win["bbox"][0]) * (win["bbox"][3] - win["bbox"][1])
+    if not (0.01 < area / (ohrc_ws.shape[0] * ohrc_ws.shape[1]) < 0.9):
+        return None, stats
+    # rebuild the winning candidate transform (deterministic, single flip)
+    b = _prep_sift(ohrc_ws)
+    sub = nac[::nac_fac, ::nac_fac]
+    lo, hi = np.nanpercentile(sub, [2, 98])
+    n8 = _normalize8(sub, lo, hi)
+    n8[np.isnan(sub)] = 0
+    nn = n8
+    if win["flip"] in ("flipV", "flipHV"):
+        nn = np.flipud(nn)
+    if win["flip"] in ("flipH", "flipHV"):
+        nn = np.fliplr(nn)
+    sift = cv2.SIFT_create(nfeatures=nfeatures, contrastThreshold=contrast_threshold,
+                           edgeThreshold=edge_threshold)
+    kpb, db = sift.detectAndCompute(b, None)
+    kpn, dn = sift.detectAndCompute(_prep_sift(nn), None)
+    bfm = cv2.BFMatcher()
+    raw = bfm.knnMatch(db, dn, k=2)
+    good = [m for m, z in raw if m.distance < ratio * z.distance]
+    src = np.float32([kpb[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst = np.float32([kpn[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    H, mask = cv2.findHomography(src, dst, cv2.USAC_MAGSAC, 5.0)
+    if H is None:
+        return None, stats
+    inl = int(mask.sum()) if mask is not None else 0
+    ncc, bbox = _ncc_overlap(H, nn, (~np.isnan(sub)).astype(np.float32), b)
+    return (dict(flip=win["flip"], H=H, inliers=inl, good=len(good), ncc=ncc,
+                 overlap_bbox=bbox, nac_ws_shape=nn.shape, nac_fac=nac_fac,
+                 method="sparse-robust", stats=stats), stats)
+
+
+def _set_georeference_pair(ohrc, ohrc_ws, nac, pix_axis, scan_axis, lon_grid,
+                           lat_grid, t, out_dir, crop_px, prefix):
+
+    def join(p):
+        return os.path.join(out_dir, p)
+
     os.makedirs(out_dir, exist_ok=True)
-
-    ohrc = read_ohrc_raw(ohrc_img_path)
-    ohrc_ws = ohrc[::OHRC_WS_FACTOR, ::OHRC_WS_FACTOR]  # (~9369, 1200)
-    nac = read_nac_img(nac_img_path)
-    pix_axis, scan_axis, lon_grid, lat_grid = read_ohrc_ground_grid(ohrc_csv_path)
-
-    t = find_pair_transform(ohrc_ws, nac)
-    if t is None or t["inliers"] < 20:
-        raise RuntimeError(
-            f"georeference: no reliable OHRC<->NAC overlap (inliers="
-            f"{(t or {}).get('inliers')}). Cannot produce same-ground-area crops."
-        )
-
     H = t["H"]
     h_ws, w_ws = t["nac_ws_shape"]
     fac = t["nac_fac"]
@@ -248,7 +401,6 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
     p0 = max(0, min(p0, ohrc.shape[1] - crop_px))
     s0 = max(0, min(s0, ohrc.shape[0] - crop_px))
     src_crop = ohrc[s0:s0 + crop_px, p0:p0 + crop_px]
-    del ohrc
     src_png = np.clip(src_crop.astype(np.float32) / 255.0, 0, 1)
     src_png = (src_png * 255).astype(np.uint8)
 
@@ -266,8 +418,6 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
     dst_grid = np.float32(
         [[0, 0], [crop_px - 1, 0], [0, crop_px - 1], [crop_px - 1, crop_px - 1]]
     )
-    # warpPerspective rejects source dims >= SHRT_MAX; the full NAC height (46080)
-    # exceeds that, so warp only a sub-region around the mapped corners.
     margin = 64
     x0 = int(max(0, np.floor(nac_corners[:, 0].min()) - margin))
     y0 = int(max(0, np.floor(nac_corners[:, 1].min()) - margin))
@@ -285,12 +435,11 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
                                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
     # ---- Outputs ----
-    src_path = os.path.join(out_dir, f"{prefix}_src.png")
-    ref_path = os.path.join(out_dir, f"{prefix}_ref.png")
+    src_path = join(f"{prefix}_src.png")
+    ref_path = join(f"{prefix}_ref.png")
     cv2.imwrite(src_path, src_png)
     cv2.imwrite(ref_path, ref_crop)
 
-    # Derived NAC corner ground coords via the OHRC grid at the 4 crop corners.
     ground_corners = [
         ground_from_ohrc(pix_axis, scan_axis, lon_grid, lat_grid,
                          p0 + (cx - half) * OHRC_WS_FACTOR, s0 + (cy - half) * OHRC_WS_FACTOR),
@@ -315,6 +464,57 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
         "src_png": src_path,
         "ref_png": ref_path,
     }
+    return meta
+
+
+def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
+                      crop_px=1024, prefix="pair1"):
+    """Crop a pair to 1024x1024 same-ground-area; write PNGs + JSON.
+
+    Outputs are named `{prefix}_src.png`, `{prefix}_ref.png` and
+    `georef_{prefix}.json` so several pairs can be processed.
+
+    Overlap search (two stages):
+      1. primary sparse SIFT (find_pair_transform)       -- unchanged Phase 1 path
+      2. boosted sparse fallback (find_pair_transform_robust) with
+         proof-based acceptance (inlier dominance + NCC) when stage 1 finds
+         <20 inliers.
+    If both fail, a full candidate-statistics diagnostic is written to
+    `georef_{prefix}_diagnostics.json` and RuntimeError is raised.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    ohrc = read_ohrc_raw(ohrc_img_path)
+    ohrc_ws = ohrc[::OHRC_WS_FACTOR, ::OHRC_WS_FACTOR]  # (~9369, 1200)
+    nac = read_nac_img(nac_img_path)
+    pix_axis, scan_axis, lon_grid, lat_grid = read_ohrc_ground_grid(ohrc_csv_path)
+
+    t = find_pair_transform(ohrc_ws, nac)
+    method = "sparse-sift"
+    diag = {}
+    if t is None or t["inliers"] < 20:
+        diag["primary"] = candidate_stats(ohrc_ws, nac)
+        t2, robust_stats = find_pair_transform_robust(ohrc_ws, nac)
+        if t2 is None:
+            diag["robust"] = robust_stats
+            diag["robust_rejected"] = (
+                "no candidate passed acceptance: inliers>=20, ratio>=0.25, "
+                "winning-ratio >= 2x second, ncc>=0.15, sane bbox"
+            )
+            with open(os.path.join(out_dir, f"georef_{prefix}_diagnostics.json"), "w") as fh:
+                json.dump(diag, fh, indent=2)
+            n = (t or {}).get('inliers')
+            raise RuntimeError(
+                f"georeference: no reliable OHRC<->NAC overlap after primary "
+                f"(inliers={n}) and boosted fallback. Diagnostics written to "
+                f"georef_{prefix}_diagnostics.json (all orientations, ratios, NCC)."
+            )
+        t = t2
+        method = t.get("method", "sparse-robust")
+
+    meta = _set_georeference_pair(ohrc, ohrc_ws, nac, pix_axis, scan_axis,
+                                  lon_grid, lat_grid, t, out_dir, crop_px, prefix)
+    meta["georef_method"] = method
     with open(os.path.join(out_dir, f"georef_{prefix}.json"), "w") as fh:
         json.dump(meta, fh, indent=2)
     return meta

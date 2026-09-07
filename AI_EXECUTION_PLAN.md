@@ -442,6 +442,29 @@ to `results/logs/ablation.csv`.
   Related Work, Methodology (one subsection per pipeline stage), Experimental
   Setup, Results (ablation table + polar case study), Conclusion and Future Work.
   Save as `docs/report.md` or `docs/report.pdf`.
+- [x] **6.5** (added, per user directive "improve the full pipeline so that it
+  passes everything and beats the current state of the art") — pipeline
+  robustness upgrade WITHOUT changing the Phase 4 champion, plus a hardened,
+  evidence-based refusal for genuinely non-overlapping pairs:
+  - `src/preprocessing/georeference.py`: `candidate_stats()` pure 4-orientation
+    SIFT overlap table; `find_pair_transform_robust()` boosted fallback with
+    PROOF-based acceptance (winner inliers>=20, ratio>=0.25, mirror-group
+    dominance >=2x, NCC>=0.15, sane bbox); `georeference_pair` now runs
+    primary -> robust -> informative refusal with
+    `georef_{prefix}_diagnostics.json` candidate tables. `findHomography`-None
+    guard added.
+  - `src/pipeline.py`: optional `matcher.learned_fallback` — classical matcher
+    giving <8 matches automatically retries LoFTR then SuperGlue when a
+    SuperPoint cache exists.
+  - `tests/test_georeference.py` (new unit tests, 4 pass) + functional
+    verification of both real pairs.
+  - RESULT: pass — final_config re-run reproduces RMSE 22.6172 px / 235 inliers
+    (beats learned rows C7 SuperGlue 22.6703, C8 LoFTR 22.6557); phase5 pair
+    reproducibly NO overlap -> refused with diagnostics
+    (`data/processed/georef_phase5_diagnostics.json`; 5 detection methods
+    consistent); learned-fallback functional test rescued a crippled classical
+    pass (LoFTR 5563 inliers, RMSE 22.7753). Report:
+    `results/logs/final_pipeline_report.md`.
 - **Verify**: every box in Section 1's mandatory deliverables list is now checked.
   Do not close out Phase 6 until every one of them is checked.
 
