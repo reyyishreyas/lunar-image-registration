@@ -24,3 +24,8 @@ jupyter
 kornia
 einops
 yacs
+
+# Data acquisition (best-model Phase 0): NASA ODE REST search/download tool
+# (dataset_download_pipeline/get_search_results.py). shapely for footprint geometry.
+requests
+shapely
