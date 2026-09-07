@@ -194,7 +194,8 @@ Work on a 1024×1024 crop of the `role=phase1` pair identified in Step 0.3.
   (target 20) picked by the user with the interactive tool; first attempt (12
   points) was internally inconsistent and re-picked by the user. Self-consistency
   check: 9/21 points within 5 px of a fitted homography, RMS 2.78 px among
-  inliers.
+  inliers. 21 points accepted as >= the 20-point target (explicit user decision;
+  C1 is NOT re-tuned to change RMSE).
 - [x] **1.7** `src/evaluation/metrics.py`: implement `rmse(H, gt_points) -> float`.
   Apply `H` to each `(x1,y1)`, compare to `(x2,y2)`, report RMSE in pixels.
   RESULT: pass — src/evaluation/metrics.py; C1 RMSE = 22.66 px over 21 GT points
@@ -210,11 +211,25 @@ Work on a 1024×1024 crop of the `role=phase1` pair identified in Step 0.3.
   Inliers, Inlier ratio, Time(s)`. Run `python scripts/run_pipeline.py --config
   configs/experiment_C1.yaml` and append the C1 row with real measured numbers.
   RESULT: pass — results/logs/ablation.csv C1 row: rmse_px=22.6614, inliers=56,
-  inlier_ratio=0.918, n_matches=61, time_s=0.88, georef_s=0.0.
+  inlier_ratio=0.918, n_matches=61, time_s=0.88, georef_s=0.0. Strictly verified:
+  re-running the actual pipeline code path reproduces rmse_px=22.6614,
+  inliers=56, ratio=0.918 (= 56/61 exactly), n_matches=61 — computed from the
+  real data/ground_truth/pair1_gt.csv, not fabricated. C1 code/config not
+  modified for verification.
 - **Verify**: the C1 row in `results/logs/ablation.csv` has non-empty numeric values
   in every numeric column, and `results/figures/pair1_matches.png` exists.
-  VERIFY: pass — pair1_matches.png exists (2.4 MB); C1 row has numeric values in
-  every numeric column (rmse/inliers/ratio/matches/time).
+  VERIFY: pass —
+  1. results/logs/ablation.csv exists (single canonical C1 row).
+  2. C1 row present: config_id=C1, preproc=georef+normalize (crop 1024x1024),
+     detector=sift, matcher=bf_ratio:0.75, outlier=ransac:5.0.
+  3. Every numeric field numeric: rmse_px=22.6614, inliers=56, inlier_ratio=0.918,
+     n_matches=61, time_s=0.88, georef_s=0.0.
+  4. results/figures/pair1_matches.png exists (2.4 MB).
+  5. data/ground_truth/pair1_gt.csv exists, header x1,y1,x2,y2, no NaN;
+     21 points (>= 20 target, accepted).
+  6. RMSE 22.6614 px recomputed from the actual GT CSV by the actual pipeline
+     (run_experiment -> rmse(H, gt)): exact match, not fabricated.
+  7. inliers=56 / ratio 0.918 / n_matches=61 reproduced by actual pipeline run.
 
 ---
 

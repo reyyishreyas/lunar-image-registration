@@ -12,11 +12,11 @@
 | [x] | 1.3 match_bf_ratio | pass — 61 good matches at ratio 0.75 |
 | [x] | 1.4 find_homography_ransac | pass — 56 inliers (ratio 0.918) |
 | [x] | 1.5 visualize | pass — results/figures/pair1_matches.png (2.4 MB) |
-| [x] | 1.6 manual GT | pass (human) — 21 control points in data/ground_truth/pair1_gt.csv |
+| [x] | 1.6 manual GT | pass (human) — 21 control points in data/ground_truth/pair1_gt.csv (>= 20 target, accepted) |
 | [x] | 1.7 metrics rmse | pass — C1 RMSE 22.66 px (21 points) |
 | [x] | 1.8 pipeline | pass — src/pipeline.py + configs/experiment_C1.yaml + scripts/run_pipeline.py |
-| [x] | 1.9 ablation | pass — C1 row in results/logs/ablation.csv, all numeric columns filled |
-| VERIFY | — | pass — C1 row numeric everywhere; pair1_matches.png exists |
+| [x] | 1.9 ablation | pass — C1 row in results/logs/ablation.csv, all numeric columns filled, strictly verified |
+| VERIFY | — | pass — C1 row numeric everywhere; pair1_matches.png exists; RMSE/inliers reproduced by actual pipeline code path |
 
 ## 3. Numbers produced this phase
 
@@ -54,8 +54,23 @@
 ## 5. Blocked or failed items
 - None. Deviations documented:
   - Phase 0 phase1 NAC M1430572656LC rejected (no overlap with OHRC-2021; ~5 SIFT inliers). User approved replacement M1469248775LC (feature-verified 249 inliers). Recorded in manifest + plan + summary.
-  - Plan target 20 GT points; user provided 21 (acceptable).
+  - Plan target 20 GT points; user provided 21 and accepted 21 as >= the 20-point target (explicit decision; C1 NOT re-tuned).
   - `results/logs/*` gitignored; plan deliverables force-added (same as Phase 0).
+
+## 5a. Strict verification of Step 1.9 (post-commit, no C1 changes)
+All checks run against the committed snapshot; only temporary write targets/test logs used.
+- 1) results/logs/ablation.csv exists — pass.
+- 2) C1 row exists — pass (single canonical row).
+- 3) Every required numeric column numeric — pass (22.6614 / 56 / 0.918 / 61 / 0.88 / 0.0).
+- 4) results/figures/pair1_matches.png exists — pass (2,414,654 bytes).
+- 5) data/ground_truth/pair1_gt.csv exists, header x1,y1,x2,y2, no NaN — pass; 21 points, accepted as >= 20.
+- 6) RMSE 22.6614 px not fabricated — pass. Re-executed the actual pipeline code path
+  (src/pipeline.run_experiment on configs/experiment_C1.yaml -> rmse(H, gt) from the real CSV):
+  reproduced rmse_px=22.6614 exactly. (An inline recompute that skipped the matcher's
+  distance-sort gave 54 inliers / 22.6600 px; the pipeline's own deterministic path gives
+  56 / 22.6614 — the logged row matches the pipeline.)
+- 7) inliers=56 / inlier_ratio=0.918 / n_matches=61 — pass. 0.918 = 56/61 exactly;
+  reproduced by actual pipeline run.
 
 ## 6. Deliverables satisfied
 - Complete end-to-end baseline pipeline (preprocessing -> detection -> matching -> mismatch
