@@ -1,0 +1,79 @@
+path,status(stub/implemented),lines_of_code
+./.gitignore,implemented,27
+./AGENTS.md,implemented,444
+./AI_EXECUTION_PLAN.md,implemented,335
+./LICENSE,stub,0
+./README.md,implemented,260
+./configs/base_config.yaml,stub,0
+./configs/experiment_clahe_sift.yaml,stub,0
+./configs/experiment_polar_case.yaml,stub,0
+./configs/experiment_sift_baseline.yaml,stub,0
+./configs/experiment_superglue.yaml,stub,0
+./demo/app.py,stub,0
+./docs/architecture_diagram.png,stub,0
+./docs/methodology.md,stub,0
+./docs/related_work.md,stub,0
+./environment.yml,stub,0
+./notebooks/01_data_exploration.ipynb,stub,0
+./notebooks/02_preprocessing_tests.ipynb,stub,0
+./notebooks/03_detector_comparison.ipynb,stub,0
+./notebooks/04_polar_case_study.ipynb,stub,0
+./notebooks/algo1.ipynb,implemented,336
+./notebooks/algo2.ipynb,implemented,234
+./notebooks/algo3.ipynb,implemented,416
+./notebooks/algo4.ipynb,implemented,392
+./notebooks/moonalgo1.ipynb,implemented,337
+./notebooks/moonalgo2.ipynb,implemented,228
+./notebooks/moonalgo3.ipynb,implemented,430
+./notebooks/moonalgo4.ipynb,implemented,391
+./requirements.txt,stub,0
+./results/final_config.yaml,stub,0
+./results/logs/ablation_results.csv,stub,0
+./scripts/download_data.sh,stub,0
+./scripts/pick_ground_truth.py,stub,0
+./scripts/run_ablation.py,stub,0
+./scripts/run_pipeline.py,stub,0
+./src/__init__.py,stub,0
+./src/detection/__init__.py,stub,0
+./src/detection/classical.py,stub,0
+./src/detection/cross_modal.py,stub,0
+./src/detection/learned.py,stub,0
+./src/evaluation/__init__.py,stub,0
+./src/evaluation/metrics.py,stub,0
+./src/evaluation/visualize.py,stub,0
+./src/io_utils/__init__.py,stub,0
+./src/io_utils/metadata.py,stub,0
+./src/io_utils/readers.py,stub,0
+./src/matching/__init__.py,stub,0
+./src/matching/classical_match.py,stub,0
+./src/matching/learned_match.py,stub,0
+./src/outlier_rejection/__init__.py,stub,0
+./src/outlier_rejection/grid_uniform.py,stub,0
+./src/outlier_rejection/ransac.py,stub,0
+./src/pipeline.py,stub,0
+./src/preprocessing/__init__.py,stub,0
+./src/preprocessing/georeference.py,stub,0
+./src/preprocessing/normalize.py,stub,0
+./src/preprocessing/resample.py,stub,0
+./src/preprocessing/shadow_correct.py,stub,0
+./src/refinement/__init__.py,stub,0
+./src/refinement/phase_correlation.py,stub,0
+./src/refinement/subpixel.py,stub,0
+./team_README.md,implemented,233
+./tests/test_detection.py,stub,0
+./tests/test_evaluation.py,stub,0
+./tests/test_matching.py,stub,0
+./tests/test_preprocessing.py,stub,0
+./weights/.gitkeep,stub,0
+notebooks/01_data_exploration.ipynb,(empty placeholder),no,0
+notebooks/02_preprocessing_tests.ipynb,(empty placeholder),no,0
+notebooks/03_detector_comparison.ipynb,(empty placeholder),no,0
+notebooks/04_polar_case_study.ipynb,(empty placeholder),no,0
+notebooks/algo1.ipynb,classical detectors (SIFT/ORB/AKAZE/BRISK/KAZE/ASIFT),yes,116
+notebooks/algo2.ipynb,RIFT2 clone,yes,7
+notebooks/algo3.ipynb,learned matcher (LightGlue/SuperPoint/DISK/ALIKED),yes,78
+notebooks/algo4.ipynb,D2-Net,yes,60
+notebooks/moonalgo1.ipynb,classical detectors (SIFT/ORB/AKAZE/BRISK/KAZE/ASIFT),yes,116
+notebooks/moonalgo2.ipynb,RIFT2 clone,yes,10
+notebooks/moonalgo3.ipynb,learned matcher (LightGlue/SuperPoint/DISK/ALIKED),yes,78
+notebooks/moonalgo4.ipynb,D2-Net,yes,66

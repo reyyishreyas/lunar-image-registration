@@ -1,0 +1,21 @@
+# Lunar Image Registration — conda environment (Phase 0.2 base)
+name: lunar-image-registration
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - numpy
+  - scipy
+  - opencv
+  - scikit-image
+  - pytorch::pytorch
+  - pytorch::torchvision
+  - rasterio
+  - pygeodesy
+  - matplotlib
+  - pandas
+  - pyyaml
+  - tqdm
+  - streamlit
+  - jupyter

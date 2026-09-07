@@ -1,0 +1,20 @@
+# Lunar Image Registration — Python dependencies
+# Phase 0.2: base list from AI_EXECUTION_PLAN.md Step 0.2 (file was previously empty).
+# NOTE: install opencv-contrib-python (superset providing SIFT/AKAZE/KAZE/BRISK — used by
+#       notebooks/algo*.ipynb). Do NOT also install opencv-python (they conflict).
+# PIN opencv-contrib-python < 5: OpenCV 5.0.x removed AKAZE/KAZE/BRISK (Phase 3 Step 3.1 and
+#       the algo notebooks need AKAZE). Verified working with 4.10.0.84.
+numpy
+scipy
+opencv-contrib-python<5
+scikit-image
+torch
+torchvision
+rasterio
+pygeodesy
+matplotlib
+pandas
+pyyaml
+tqdm
+streamlit
+jupyter

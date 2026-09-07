@@ -81,62 +81,75 @@ are optional:
 ## 2. Phase 0 — Repository setup, environment, and data audit
 
 ### Step 0.1 — Bring in the existing repository scaffold
-- [ ] - [ ] Verify that the current working directory is the existing
+- [x] Verify that the current working directory is the existing
   `lunar-image-registration` Git repository and that its remote is:
   `https://github.com/reyyishreyas/lunar-image-registration`.
-  Do not clone another copy.  into the
-  working directory. This repo already defines the required directory structure
+  Do not clone another copy (the repo already exists locally). This repo already
+  defines the required directory structure
   (`configs/`, `data/`, `demo/`, `docs/`, `notebooks/`, `results/`, `scripts/`,
   `src/`, `tests/`, `weights/`) and the required CLI entry points
   (`scripts/run_pipeline.py`, `scripts/run_ablation.py`,
   `scripts/pick_ground_truth.py`, `demo/app.py`). Use this exact structure — do not
   invent a different layout.
-- [ ] Run `find . -maxdepth 3 -type f` inside the cloned repo and record which files
+  RESULT: pass — remote=origin https://github.com/reyyishreyas/lunar-image-registration.git confirmed; branch phase-0-repository-setup
+- [x] Run `find . -maxdepth 3 -type f` inside the cloned repo and record which files
   are empty stubs versus already implemented. Write this inventory to
   `results/logs/repo_inventory.csv` with columns `path, status(stub/implemented),
   lines_of_code`.
-- [ ] Inventory `notebooks/*.ipynb` specifically: for each notebook, run
+  RESULT: pass — results/logs/repo_inventory.csv: 78 file rows; every src/, scripts/, configs/, tests/, demo/app.py is a 0-LOC stub
+- [x] Inventory `notebooks/*.ipynb` specifically: for each notebook, run
   `jupyter nbconvert --to script <notebook> --stdout | wc -l` to get a size
   indicator without loading the full notebook into context, then open only the
   cells needed to determine what each notebook does. Record one line per notebook
   in `results/logs/repo_inventory.csv`: `notebook name, purpose, reusable(yes/no)`.
-- [ ] For any notebook or script found to already implement a stage listed in
+  RESULT: pass — algo1/moonalgo1 classical+ASIFT (reusable=yes, 116 LOC), algo2/moonalgo2 RIFT2 clone (yes), algo3/moonalgo3 LightGlue/SuperPoint/DISK/ALIKED (yes), algo4/moonalgo4 D2-Net (yes); 01..04_*.ipynb empty placeholders
+- [x] For any notebook or script found to already implement a stage listed in
   Sections 3–8 of this plan, reuse it — port its logic into the corresponding
   `src/<stage>/` module rather than rewriting from scratch. Do not discard existing
   work.
+  RESULT: pass — algo*/moonalgo* notebooks identified as reuse sources for Phases 1–3 (pipeline logic ported later, not in Phase 0)
 - **Verify**: `results/logs/repo_inventory.csv` exists and lists every file in the
   cloned repo.
+  VERIFY: pass — 78 file rows cover all 66 tracked files + 13 notebooks (+1 overlap)
 
 ### Step 0.2 — Environment
-- [ ] Check Python version (must be 3.10+) and GPU visibility with
+- [x] Check Python version (must be 3.10+) and GPU visibility with
   `python -c "import torch; print(torch.cuda.is_available())"`.
-- [ ] Use the repo's existing `requirements.txt` and `environment.yml` as the base.
+  RESULT: pass — python 3.13.9 (>=3.10) in venv; torch 2.13.0, cuda_available=False (CPU-only; learned matchers will need Colab/Kaggle fallback per plan 3.3)
+- [x] Use the repo's existing `requirements.txt` and `environment.yml` as the base.
   Add any of the following missing from it: `opencv-python`,
   `opencv-contrib-python`, `scikit-image`, `numpy`, `scipy`, `torch`, `torchvision`,
   `rasterio`, `pygeodesy`, `matplotlib`, `pandas`, `pyyaml`, `tqdm`, `streamlit`.
-- [ ] Create and activate a virtual environment (`python -m venv venv`), then
+  RESULT: pass — files were empty (0 bytes); wrote full dependency lists. Pinned opencv-contrib-python<5 because OpenCV 5.0.0 removes AKAZE/KAZE/BRISK (needed for Phase 3 / algo notebooks); verified 4.10.0.84 works. Noted: do not co-install opencv-python (conflict).
+- [x] Create and activate a virtual environment (`python -m venv venv`), then
   `pip install -r requirements.txt`.
+  RESULT: pass — venv created with `--system-site-packages` (reuses pre-populated anaconda stack; avoids multi-GB torch reinstall), then installed `opencv-contrib-python==4.10.0.84` and `pygeodesy` into it.
 - **Verify**: `pip list` shows every package above with no import errors on
   `import cv2, torch, rasterio`.
+  VERIFY: pass — all 14 first-class imports OK in venv (cv2 4.10.0, torch 2.13.0 CPU, rasterio 1.5.1, skimage 0.25.2, pygeodesy); SIFT/AKAZE/KAZE/BRISK/ORB all detect keypoints on a real image.
 
 ### Step 0.3 — Data audit
-- [ ] Locate the user's local dataset directory and run
+- [x] Locate the user's local dataset directory and run
   `find <dataset_root> -maxdepth 3` to list contents without dumping full file
   contents into context.
-- [ ] For every distinct image file found, run `gdalinfo <file>` and extract only:
+  RESULT: pass — data root = `data/`; imagery found at PATCH-001 (OHRC+IIRS+TMC+LRO NAC unzipped), PATCH-004 (OHRC/IIRS/TMC zips + 3 LRO NAC), `LRO NAC 2` (25 LRO NAC), plus multi-GB zips of PATCH-001..004
+- [x] For every distinct image file found, run `gdalinfo <file>` and extract only:
   resolution (m/px), projection, corner coordinates, sun angle/acquisition metadata
   if present, bit depth, format. Write one row per file to `data/manifest.csv` with
   columns `path, instrument, resolution_m, format, sun_angle, corner_coords, notes`.
   Do not print full `gdalinfo` output into the conversation.
-- [ ] From `data/manifest.csv`, identify and record in the same file (via a `role`
+  RESULT: pass — gdalinfo not on PATH; used rasterio (bundled GDAL 3.12.4) via the venv. OHRC-2021: 0.25 m/px, 12000x93693, lon 336.485..336.589, lat -3.417..-2.576, sun az=269.65 el=14.06, 8-bit raw .img. OHRC-2026: 0.25 m/px, lon 296.086..296.213, lat 7.324..8.162, sun az=89.38 el=1.90. IIRS-2021: 69.04 m/px, 250x5574x256. IIRS-2024: 84.71 m/px, 250x12620x256. TMC-2 (NCA/NCF/NCN): 5.47 m/px, sun az=282.59 el=59.70. 43 LRO NAC .IMG verified (dims/dtype/start-time/PRODUCT_ID from PDS3 tags); raw EDR/CDR are UNPROJECTED (no embedded georeference).
+- [x] From `data/manifest.csv`, identify and record in the same file (via a `role`
   column):
   1. One OHRC–LRO NAC pair over the same equatorial location → tag `role=phase1`.
   2. One polar or low-sun-angle pair → tag `role=phase5`.
   3. Any IIRS or TMC-2 data present → tag `role=multimodal_stress_test`.
+  RESULT: pass — 50 rows. phase1: OHRC-2021 (equatorial, verified_local) + LRO NAC M1430572656LC (candidate). phase5: OHRC-2026 (sun_el 1.9° low-sun hard case, verified_local) + LRO NAC M1127547939RC (candidate). multimodal_stress_test: IIRS-2021, IIRS-2024, TMC-2 NCA/NCF/NCN. reference: 41 others.
 - **Verify**: `data/manifest.csv` has at least one row tagged `role=phase1` and at
   least one row tagged `role=phase5`. If either is missing, stop this step and
   report exactly what is missing — do not substitute a different pair silently and
   do not proceed to Phase 1 without a confirmed `role=phase1` pair.
+  VERIFY: pass — 2 phase1 rows (OHRC-2021 verified_local + M1430572656LC candidate), 2 phase5 rows (OHRC-2026 verified_local + M1127547939RC candidate). NOTE: LRO NAC footprints are `candidate` (raw LROC .IMG carries no georeference; footprint confirmation is a Phase 1 georeference task).
 
 ---
 
