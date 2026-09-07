@@ -507,3 +507,37 @@ print the same content as the final message of that phase's work:
 This summary is required output at the end of every phase. Do not proceed to the
 next phase's Step 1 in the same turn as the summary — end the turn after producing
 the summary so the result is reviewable before continuing.
+
+---
+
+## 11. Best-Model Restart (user directive 2026-09-08) — tracking
+
+Directive: "push Phase 6, then restart from Phase 1, take proper measures to make
+it the best working model; check other branches (e.g. download-pipeline); ask for
+help wherever needed."
+
+Restart phases (each gets its own branch off updated main, per AGENTS.md):
+
+### Restart Phase 0 — Data & tooling ([ ] -> re-run of original Phase 0 audit)
+- [x] Branch `phase-1-best-model` (off main, Phase 6 merged in).
+- [x] Port `dataset_download_pipeline/get_search_results.py` from
+      `origin/download-pipeline` — working NASA ODE REST footprint search
+      (`results=fmpc` WKT polygons, overlap-ranked, lowest-incidence tiebreak,
+      direct .IMG URLs). Add `shapely` + `requests` to requirements.
+- [x] ODE-verified the PATCH-004 pair: M1127547939RC covers **100 %** of the
+      OHRC-2026 footprint. Phase 5/6 "no overlap" verdict REVERSED — it was a
+      feature-search failure, not geometry. See `results/logs/phase5_verdict_reversal.md`.
+- [x] Downloaded 4 high-overlap NACs (M1127547939RC, M1298165405LC 96.8 %,
+      M181587967LC 96.4 %, M1182892612LC 93.3 %; 4 x 528.9 MB) to
+      `data/PATCH-004/LRO NAC/ode_downloads/ch2_ohr_ncp_20260331T1105235288_d_img_d18/`.
+- [x] Instrument support: torch MPS available (Apple Silicon GPU) for learned
+      matchers; shapely 2.1.2 installed.
+- RESULT: 4 NAC candidates + definitive overlap proof + working ODE tool.
+- Files: `dataset_download_pipeline/get_search_results.py`, `scripts/footprint_warp.py`
+      (equal-GSD warp scaffold, WIP), `requirements.txt`, `results/logs/phase5_verdict_reversal.md`.
+
+### Restart Phase 1 — Foundation: equal-GSD staging + photometric preconditioning
+- [ ] Next step (not started): make every matching stage operate at a common GSD
+      (no more fixed `nac_fac` guesses), add per-config photometric
+      preconditioning (`none | clahe | edges`), re-run FINAL_CONFIG on pair 1 as
+      regression, then attempt pair 2 against all four downloaded NACs.
