@@ -25,3 +25,4 @@ results/logs/*
 *.jp2
 
 .env
+._*

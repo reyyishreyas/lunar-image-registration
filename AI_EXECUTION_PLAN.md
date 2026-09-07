@@ -157,35 +157,79 @@ are optional:
 
 Work on a 1024×1024 crop of the `role=phase1` pair identified in Step 0.3.
 
-- [ ] **1.1** `src/preprocessing/georeference.py`: crop/resize both images to the
+- [x] **1.1** `src/preprocessing/georeference.py`: crop/resize both images to the
   same approximate ground area using the corner coordinates in `data/manifest.csv`.
   Output: `data/processed/pair1_src.png`, `data/processed/pair1_ref.png`.
-- [ ] **1.2** `src/detection/classical.py`: implement
+  RESULT: pass — module written (raw .img + ISRO geometry-CSV readers, LRO NAC
+  reader, feature co-registration with NCC-tiebreak mirror handling, sub-region
+  warp). Produce = data/processed/pair1_src.png / pair1_ref.png (1024x1024),
+  georef_pair1.json. Note (pair change, recorded in manifest + Phase summary): the
+  Phase 0 NAC candidate M1430572656LC showed no overlap with the OHRC-2021 scene
+  (SIFT co-registration ~5 inliers) and was replaced after user approval by
+  M1469248775LC, which is feature-verified (249 inliers, flipV) against the OHRC
+  ground grid. OHRC corners = verified_local (geometry CSV). NAC corners remain
+  `candidate`, now feature-derived (georef_pair1.json).
+- [x] **1.2** `src/detection/classical.py`: implement
   `detect_sift(img) -> keypoints, descriptors` using `cv2.SIFT_create()`.
-- [ ] **1.3** `src/matching/classical_match.py`: implement
+  RESULT: pass — src/detection/classical.py; on C1 crops: src=328 kps, ref=2959 kps.
+- [x] **1.3** `src/matching/classical_match.py`: implement
   `match_bf_ratio(desc1, desc2, ratio=0.75) -> matches` using `cv2.BFMatcher` with
   Lowe's ratio test.
-- [ ] **1.4** `src/outlier_rejection/ransac.py`: implement
+  RESULT: pass — src/matching/classical_match.py; 61 good matches at ratio 0.75
+  on C1 crops.
+- [x] **1.4** `src/outlier_rejection/ransac.py`: implement
   `find_homography_ransac(pts1, pts2) -> H, inlier_mask` using
   `cv2.findHomography(..., cv2.RANSAC, 5.0)`.
-- [ ] **1.5** `src/evaluation/visualize.py`: wrap `cv2.drawMatches()`; save to
+  RESULT: pass — src/outlier_rejection/ransac.py; C1 RANSAC inliers = 56/61
+  (inlier ratio 0.918).
+- [x] **1.5** `src/evaluation/visualize.py`: wrap `cv2.drawMatches()`; save to
   `results/figures/pair1_matches.png`.
-- [ ] **1.6** Manually pick 20 ground-truth control points between the two images
+  RESULT: pass — results/figures/pair1_matches.png written (2.4 MB, green=inlier
+  matches).
+- [x] **1.6** Manually pick 20 ground-truth control points between the two images
   using `scripts/pick_ground_truth.py`. Save to `data/ground_truth/pair1_gt.csv`
   with columns `x1,y1,x2,y2`. This step is manual and must be done by a human
   before continuing — do not fabricate ground-truth points.
-- [ ] **1.7** `src/evaluation/metrics.py`: implement `rmse(H, gt_points) -> float`.
+  RESULT: pass (human) — data/ground_truth/pair1_gt.csv: 21 control points
+  (target 20) picked by the user with the interactive tool; first attempt (12
+  points) was internally inconsistent and re-picked by the user. Self-consistency
+  check: 9/21 points within 5 px of a fitted homography, RMS 2.78 px among
+  inliers. 21 points accepted as >= the 20-point target (explicit user decision;
+  C1 is NOT re-tuned to change RMSE).
+- [x] **1.7** `src/evaluation/metrics.py`: implement `rmse(H, gt_points) -> float`.
   Apply `H` to each `(x1,y1)`, compare to `(x2,y2)`, report RMSE in pixels.
-- [ ] **1.8** `src/pipeline.py`: orchestrate steps 1.1–1.7 driven by
+  RESULT: pass — src/evaluation/metrics.py; C1 RMSE = 22.66 px over 21 GT points
+  (cleaned 19/21 -> 11.21 px, median 9.31 px; 2 human pick outliers removed).
+- [x] **1.8** `src/pipeline.py`: orchestrate steps 1.1–1.7 driven by
   `configs/experiment_C1.yaml`. This is the single entry point for every later
   phase — later phases add new functions and new config files, never new
   orchestration logic in a separate script.
-- [ ] **1.9** Create `results/logs/ablation.csv` with columns: `Config ID,
+  RESULT: pass — src/pipeline.py + scripts/run_pipeline.py + configs/experiment_C1.yaml;
+  end-to-end run OK (detect[sift]->match[bf_ratio:0.75]->ransac[5.0]).
+- [x] **1.9** Create `results/logs/ablation.csv` with columns: `Config ID,
   Preprocessing, Detector, Matcher, Outlier rejection, Refinement, RMSE(px),
   Inliers, Inlier ratio, Time(s)`. Run `python scripts/run_pipeline.py --config
   configs/experiment_C1.yaml` and append the C1 row with real measured numbers.
+  RESULT: pass — results/logs/ablation.csv C1 row: rmse_px=22.6614, inliers=56,
+  inlier_ratio=0.918, n_matches=61, time_s=0.88, georef_s=0.0. Strictly verified:
+  re-running the actual pipeline code path reproduces rmse_px=22.6614,
+  inliers=56, ratio=0.918 (= 56/61 exactly), n_matches=61 — computed from the
+  real data/ground_truth/pair1_gt.csv, not fabricated. C1 code/config not
+  modified for verification.
 - **Verify**: the C1 row in `results/logs/ablation.csv` has non-empty numeric values
   in every numeric column, and `results/figures/pair1_matches.png` exists.
+  VERIFY: pass —
+  1. results/logs/ablation.csv exists (single canonical C1 row).
+  2. C1 row present: config_id=C1, preproc=georef+normalize (crop 1024x1024),
+     detector=sift, matcher=bf_ratio:0.75, outlier=ransac:5.0.
+  3. Every numeric field numeric: rmse_px=22.6614, inliers=56, inlier_ratio=0.918,
+     n_matches=61, time_s=0.88, georef_s=0.0.
+  4. results/figures/pair1_matches.png exists (2.4 MB).
+  5. data/ground_truth/pair1_gt.csv exists, header x1,y1,x2,y2, no NaN;
+     21 points (>= 20 target, accepted).
+  6. RMSE 22.6614 px recomputed from the actual GT CSV by the actual pipeline
+     (run_experiment -> rmse(H, gt)): exact match, not fabricated.
+  7. inliers=56 / ratio 0.918 / n_matches=61 reproduced by actual pipeline run.
 
 ---
 

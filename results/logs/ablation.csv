@@ -1,0 +1,2 @@
+config_id,preproc,detector,matcher,outlier,refinement,rmse_px,inliers,inlier_ratio,n_matches,time_s,georef_s
+C1,georef+normalize (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6614,56,0.918,61,0.88,0.0
