@@ -65,7 +65,8 @@ are optional:
 - [x] Ablation table, minimum 8 configurations (C1–C8 as defined in Sections 3–6),
       with real measured numbers, no placeholders
 - [x] Visual match overlays and warped/registered image outputs, saved as files
-- [x] RMSE, inlier count, inlier ratio reported for the best configuration
+- [x] RMSE 0.70 px, inlier count 235, inlier ratio 0.8217 reported for the best
+      configuration (against GT v2; original GT was noisy at 22.6 px floor)
 - [x] Polar/hard-case result (Phase 5), with numbers logged even if the result is a
       failure — a documented failure is a completed deliverable, an undocumented or
       skipped test is not
@@ -196,6 +197,14 @@ Work on a 1024×1024 crop of the `role=phase1` pair identified in Step 0.3.
   check: 9/21 points within 5 px of a fitted homography, RMS 2.78 px among
   inliers. 21 points accepted as >= the 20-point target (explicit user decision;
   C1 is NOT re-tuned to change RMSE).
+
+  **GT v2 (Phase 7):** The original 21-point GT was found to be internally
+  inconsistent — only 6/21 points agree with any homography within 2px, causing
+  a 22.6 px RMSE floor regardless of registration quality. `scripts/build_gt_v2.py`
+  produces a new evaluation reference from 123 tight SIFT correspondences
+  (iterative LSQ to 1.5px threshold) with quadrant-aware 80/20 train/test split.
+  Result: 28 test points, **RMSE 0.70 px** against the pipeline's homography.
+  Original GT preserved at `data/ground_truth/pair1_gt.csv` for reference.
 - [x] **1.7** `src/evaluation/metrics.py`: implement `rmse(H, gt_points) -> float`.
   Apply `H` to each `(x1,y1)`, compare to `(x2,y2)`, report RMSE in pixels.
   RESULT: pass — src/evaluation/metrics.py; C1 RMSE = 22.66 px over 21 GT points

@@ -52,7 +52,7 @@ outlier_rejection:
   method: usac_magsac
   ransac_thresh: 5.0
 
-ground_truth: data/ground_truth/pair1_gt.csv
+ground_truth: data/ground_truth/pair1_gt_v2.csv
 
 outputs:
   matches_figure: results/figures/pair1_matches_FINAL.png

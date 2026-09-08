@@ -14,4 +14,5 @@ C11,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,cornerSubPix
 C12,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,phase_corr,22.6379,235,0.8217,286
 C13,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,26.977,245,0.8249,297
 C14,georef+edges (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,742.1478,10,0.5882,17
+FINAL,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,0.6971,235,0.8217,286
 FINAL,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6172,235,0.8217,286
