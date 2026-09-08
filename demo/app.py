@@ -1,10 +1,17 @@
-"""Streamlit demo for the lunar image registration pipeline (Phase 6.1).
+"""Streamlit app for the lunar image registration pipeline.
 
-The demo ONLY orchestrates the pipeline: it builds a FINAL_CONFIG-derived
-experiment YAML and calls `src.pipeline.run_experiment`. No matching,
-detection, georeferencing or outlier-rejection logic is reimplemented here.
+The app ONLY orchestrates the pipeline: it builds the experiment config and
+calls `src.pipeline.run_experiment` / `src.auto_pipeline.run_auto` /
+`src.auto_pipeline.run_sensor_auto`. No matching, detection, georeferencing or
+outlier-rejection logic is reimplemented here.
 
 Modes:
+  * Automatic registration (OHRC + LRO NAC) — one-click full run including
+    georeference staging (cached crops reused when present).
+  * Multi-sensor registration (TMC ⟷ OHRC, IIRS ⟷ OHRC) — one-click Phase 9
+    Chandrayaan-2 sensor pairs; dark/low-sun pairs are enhanced first and fall
+    back to geometry registration automatically; results are phrased for
+    non-expert users.
   * Project pair-1 (OHRC-2021 + LRO NAC M1469248775LC) — full run including
     georeference staging (cached crops reused when present).
   * Project pair-2 (polar OHRC-2026 + M1127547939RC) — demonstrates the
@@ -13,7 +20,7 @@ Modes:
     two uploaded grayscale images (preprocessing disabled).
 
 Run with:
-    venv/bin/streamlit run demo/app.py
+    venv/bin/python -m streamlit run demo/app.py
 """
 
 from __future__ import annotations
@@ -59,6 +66,53 @@ PAIR2 = {
     "out_dir": os.path.join(DEMO_DIR, "pair2"),
 }
 
+# --------------------------------------------------------------------------- #
+# Phase 9 — Chandrayaan-2 multi-sensor presets (TMC / IIRS vs OHRC)
+# --------------------------------------------------------------------------- #
+TMC_EXTRACTED_IMG = ("data/processed/tmc/"
+                     "ch2_tmc_nca_20260607T2319176707_d_img_d18.img")
+TMC_EXTRACTED_CSV = ("data/processed/tmc/"
+                     "ch2_tmc_nca_20260607T2319176707_g_grd_d18.csv")
+TMC_ZIP = "data/PATCH-004/TMC/ch2_tmc_nca_20260607T2319176707_d_img_d18.zip"
+
+SENSOR_PRESETS = {
+    "TMC ⟷ OHRC — Chandrayaan-2 (2026, same orbit family)": {
+        "sensor": "tmc-ohrc",
+        "src_img": TMC_EXTRACTED_IMG,
+        "src_geom": TMC_EXTRACTED_CSV,
+        "ref_img": PAIR2["ohrc_img"],
+        "ref_geom": PAIR2["ohrc_geometry"],
+        "note": ("Terrain Mapping Camera vs OHRC over the same region. The OHRC "
+                 "acquisition here is a dark/low-sun hard case — the pipeline "
+                 "enhances contrast first, then falls back to geometry "
+                 "registration when content cannot be verified."),
+    },
+    "IIRS ⟷ OHRC — hyperspectral IR vs visible (2021)": {
+        "sensor": "iirs-ohrc",
+        "src_img": ("data/PATCH-001/data/IIRS/"
+                    "ch2_iir_nri_20211221T0324126144_d_img_hw1/"
+                    "data/raw/20211221/"
+                    "ch2_iir_nri_20211221T0324126144_d_img_hw1.qub"),
+        "src_geom": ("data/PATCH-001/data/IIRS/"
+                     "ch2_iir_nri_20211221T0324126144_d_img_hw1/"
+                     "data/raw/20211221/"
+                     "ch2_iir_nri_20211221T0324126144_d_img_hw1.hdr"),
+        "ref_img": PAIR1["ohrc_img"],
+        "ref_geom": PAIR1["ohrc_geometry"],
+        "note": ("Imaging IR Spectrometer (hyperspectral) vs OHRC visible. IIRS "
+                 "ships no ground-geometry CSV, so registration is content-based "
+                 "only; the pipeline reports honestly if no reliable match "
+                 "exists."),
+    },
+}
+
+TMC_ARCHIVE_FILES = {
+    "data/calibrated/20260607/ch2_tmc_nca_20260607T2319176707_d_img_d18.img":
+        TMC_EXTRACTED_IMG,
+    "geometry/calibrated/20260607/ch2_tmc_nca_20260607T2319176707_g_grd_d18.csv":
+        TMC_EXTRACTED_CSV,
+}
+
 
 def _base_config():
     with open(os.path.join(ROOT, FINAL_CONFIG)) as fh:
@@ -71,6 +125,118 @@ def _write_experiment(cfg, name):
     with open(path, "w") as fh:
         yaml.safe_dump(cfg, fh, sort_keys=False)
     return path
+
+
+def _ensure_tmc_extracted():
+    """One-click convenience: unpack the TMC .img + geometry CSV from its zip
+    into data/processed/tmc/ so the multi-sensor demo can read them."""
+    import zipfile
+    if (os.path.exists(os.path.join(ROOT, TMC_EXTRACTED_IMG)) and
+            os.path.exists(os.path.join(ROOT, TMC_EXTRACTED_CSV))):
+        return None
+    zpath = os.path.join(ROOT, TMC_ZIP)
+    if not os.path.exists(zpath):
+        return f"Missing archive: `{TMC_ZIP}` — drop the TMC product here first."
+    out = os.path.join(ROOT, "data/processed/tmc")
+    os.makedirs(out, exist_ok=True)
+    with zipfile.ZipFile(zpath) as zf:
+        for member, dest in TMC_ARCHIVE_FILES.items():
+            zf.extract(member, out)
+            os.rename(os.path.join(out, member), os.path.join(ROOT, dest))
+            os.removedirs(os.path.dirname(os.path.join(out, member)))
+    return None
+
+
+def _friendly_status(verdict):
+    """(icon, headline, kind) for a pipeline verdict, phrased for non-experts."""
+    table = {
+        "registered": ("✅", "Images registered by content", "success"),
+        "geometry_registered": ("🌗", "Registered by geometry — dark/low-sun pair",
+                                "success"),
+        "no_content_correspondence": ("🔍", "No content match found — geometry "
+                                       "fallback", "info"),
+        "not_registered": ("⛔", "Could not register these images", "warning"),
+    }
+    return table.get(verdict, ("ℹ️", verdict or "No verdict", "info"))
+
+
+def _sensor_metric_cols(rep):
+    verdict = rep.get("verdict")
+    c = st.columns(4)
+    icon, headline, kind = _friendly_status(verdict)
+    c[0].metric("Method", rep.get("method") or "—")
+    c[1].metric("GSD", f"{rep.get('gsd_m'):.2f} m/px"
+                       if isinstance(rep.get("gsd_m"), (int, float)) else "—")
+    rmse = rep.get("rmse_px")
+    c[2].metric("RMSE (px)", f"{rmse:.3f}" if isinstance(rmse, float) else "n/a")
+    c[3].metric("Inliers", f"{rep.get('inliers', 0)} ({rep.get('n_matches', 0)} raw)"
+                            if rep.get("inliers") else "n/a")
+    return verdict
+
+
+def _render_ground_artifacts(rep):
+    arts = rep.get("artifacts") or {}
+    a, b = st.columns(2)
+    src, ref = arts.get("src"), arts.get("ref")
+    if src and os.path.exists(os.path.join(ROOT, src)):
+        a.image(os.path.join(ROOT, src), caption="Source (ground-ready)",
+                width="stretch")
+    if ref and os.path.exists(os.path.join(ROOT, ref)):
+        b.image(os.path.join(ROOT, ref), caption="Reference (ground-ready)",
+                width="stretch")
+    m = arts.get("matches")
+    if m and os.path.exists(os.path.join(ROOT, m)):
+        st.image(os.path.join(ROOT, m), caption="Verified content matches",
+                 width="stretch")
+
+
+def _render_sensor(res):
+    """Reader-friendly report of a multi-sensor (TMC / IIRS vs OHRC) run."""
+    rep = res.get("report", {})
+    verdict = _sensor_metric_cols(rep)
+    icon, headline, kind = _friendly_status(verdict)
+    getattr(st, kind)(f"{icon} **{headline}**")
+
+    if verdict == "registered":
+        st.write("The two images show the same ground features strongly enough "
+                 "that the pipeline matched them directly (cross-modal, "
+                 f"method **{rep.get('method')}**).")
+    elif verdict == "geometry_registered":
+        st.write("The scene is a dark or low-sun region, so automatic feature "
+                 "matching cannot be trusted. Instead the pipeline placed both "
+                 "images on the same geographic grid from the spacecraft "
+                 "geometry (ground sample distance "
+                 f"**{rep.get('gsd_m', 0):.2f} m/px**) and stacked them there. "
+                 "They are registered in space even though the images look "
+                 "different.")
+    elif verdict == "not_registered":
+        st.warning("The two products could not be registered: no verified "
+                   "content matches and no usable ground geometry. The "
+                   "pipeline reports this honestly rather than returning a "
+                   "guessed alignment.")
+
+    georef = rep.get("georef") or {}
+    if georef:
+        s, r = georef.get("src", {}), georef.get("ref", {})
+        st.caption(
+            f"Footprints — source: lon {s.get('lon', ['', ''])[0]:.3f}–"
+            f"{s.get('lon', ['', ''])[1]:.3f}°, lat {s.get('lat', ['', ''])[0]:.3f}"
+            f"–{s.get('lat', ['', ''])[1]:.3f}° · reference: lon "
+            f"{r.get('lon', ['', ''])[0]:.3f}–{r.get('lon', ['', ''])[1]:.3f}°, "
+            f"lat {r.get('lat', ['', ''])[0]:.3f}–{r.get('lat', ['', ''])[1]:.3f}°"
+            f" · overlap: {'yes' if georef.get('overlap') else 'no'}")
+    _render_ground_artifacts(rep)
+    dg = rep.get("diagnostics") or {}
+    if dg:
+        st.caption(
+            "Image quality — source mean "
+            f"{dg.get('src_mean', 0):.0f}/255, reference mean "
+            f"{dg.get('ref_mean', 0):.0f}/255 (low values = dark/low-sun).")
+    notes = rep.get("notes") or []
+    if notes:
+        with st.expander("Technical notes"):
+            for n in notes:
+                st.markdown(f"- {n}")
 
 
 def build_pair_config(pair, overrides):
@@ -135,13 +301,16 @@ def run_demo(config_path):
 def main():
     st.set_page_config(page_title="Lunar Image Registration — Demo",
                        layout="wide")
-    st.title("OHRC ⟷ LRO NAC image registration")
-    st.caption("Demo drives the repository pipeline (src/pipeline.py) with "
-               "FINAL_CONFIG; no matching logic is reimplemented here.")
+    st.title("Chandrayaan-2 & LRO image registration")
+    st.caption("One-click registration for OHRC ⟷ LRO NAC, TMC ⟷ OHRC and "
+               "IIRS ⟷ OHRC. The app drives the repository "
+               "pipeline (src/pipeline.py / src/auto_pipeline.py); no matching "
+               "logic is reimplemented here.")
 
     with st.sidebar:
         mode = st.radio("Input mode", [
             "Automatic registration",
+            "Multi-sensor registration (TMC / IIRS)",
             "Project pair-1",
             "Project pair-2 (polar, geometry registration)",
             "Upload aligned crops",
@@ -152,6 +321,13 @@ def main():
                                 value=False)
         use_cached = st.checkbox("Load cached demo output instead of running",
                                  value=False)
+
+    if mode.startswith("Multi-sensor"):
+        sensor_res = _execute_sensor()
+        if sensor_res.get("report"):
+            st.subheader("Results")
+            _render_sensor(sensor_res)
+        return
 
     if st.button("Run pipeline (FINAL_CONFIG)"):
         st.session_state["result"] = None
@@ -168,6 +344,12 @@ def main():
             st.info(res["error"])
             return
         _render_auto(res)
+        return
+    if res.get("mode") == "sensor":
+        if res.get("error"):
+            st.info(res["error"])
+            return
+        _render_sensor(res)
         return
     if res.get("mode") == "phase5":
         _render_phase5(res)
@@ -188,11 +370,11 @@ def main():
     left, right = st.columns(2)
     if res.get("fig"):
         left.image(res["fig"], caption="Inlier match overlay (pipeline output)",
-                   use_container_width=True)
+                   width="stretch")
     if res.get("checker"):
         right.image(res["checker"], caption="Checkerboard blend of staged "
                                             "(aligned) crops",
-                    use_container_width=True)
+                    width="stretch")
     gsd = res.get("gsd_m")
     if gsd:
         st.caption(f"Staged common GSD: {gsd} m/px")
@@ -330,12 +512,11 @@ def _execute_auto(normalize, equal_gsd):
 
 
 def _render_auto(res):
-    from src.auto_pipeline import summarize
-
     rep = res.get("report", {})
     verdict = rep.get("verdict")
     st.subheader("Fully-automatic result")
-    st.success(summarize(rep))
+    icon, headline, kind = _friendly_status(verdict)
+    getattr(st, kind)(f"{icon} **{headline}**")
 
     c = st.columns(4)
     c[0].metric("Verdict", verdict)
@@ -348,13 +529,20 @@ def _render_auto(res):
     if verdict in ("registered", "geometry_registered"):
         meth = rep.get("method")
         st.caption(f"Method: **{meth}**"
-                   + (f" · GSD {rep.get('staged_gsd_m')} m/px"
-                      if rep.get("staged_gsd_m") else ""))
+                   + (f" · GSD {rep.get('staged_gsd_m') or rep.get('gsd_m')} m/px"
+                      if rep.get("staged_gsd_m") or rep.get("gsd_m") else ""))
+        if verdict == "geometry_registered":
+            st.write("The scene is a dark or low-sun region, so automatic "
+                     "feature matching cannot be trusted. The pipeline placed "
+                     "both images on the same geographic grid from the "
+                     "spacecraft geometry instead — they are registered in "
+                     "space even though the images look different.")
         arts = rep.get("artifacts") or {}
-        for key in ("matches", "checkerboard", "overlay", "src", "ref"):
+        for key in ("matches", "checkerboard", "overlay"):
             p = arts.get(key)
             if p and os.path.exists(os.path.join(ROOT, p)):
                 st.image(os.path.join(ROOT, p), caption=key, width=640)
+        _render_ground_artifacts(rep)
         if rep.get("rmse_px") is not None and 0 < rep["rmse_px"] < 1.0:
             st.success(f"**Sub-pixel registration**: RMSE {rep['rmse_px']:.4f} px "
                        "< 1.0 px target.")
@@ -364,7 +552,43 @@ def _render_auto(res):
     else:
         st.error("Registration not completed: " + " | ".join(rep.get("notes", [])))
     if rep.get("notes"):
-        st.caption("Notes: " + " | ".join(rep.get("notes", [])))
+        with st.expander("Technical notes"):
+            for n in rep["notes"]:
+                st.markdown(f"- {n}")
+
+
+def _execute_sensor():
+    """Friendly wrapper around run_sensor_auto for the TMC / IIRS presets."""
+    from src.auto_pipeline import run_sensor_auto
+
+    label = st.selectbox("Sensor pair", list(SENSOR_PRESETS.keys()))
+    preset = SENSOR_PRESETS[label]
+    st.caption(preset["note"])
+
+    if preset["sensor"] == "tmc-ohrc":
+        with st.spinner("Preparing TMC product (unzip ~2 GB on first run)…"):
+            err = _ensure_tmc_extracted()
+        if err:
+            return {"error": err, "notes": {}}
+        if not os.path.exists(os.path.join(ROOT, preset["src_img"])):
+            return {"error": "TMC product did not extract correctly — check "
+                             "the archive under data/PATCH-004/TMC/.", "notes": {}}
+
+    out_dir = os.path.join(DEMO_DIR, "sensor")
+    prefix = preset["sensor"]
+
+    if st.button(f"Register — {label}", type="primary"):
+        with st.spinner("Registering… (dark/low-sun pairs use the geometry "
+                        "fallback automatically)"):
+            st.session_state["sensor_report"] = run_sensor_auto(
+                preset["sensor"], preset["src_img"], preset["src_geom"],
+                preset["ref_img"], preset["ref_geom"],
+                out_dir=os.path.relpath(out_dir, ROOT), prefix=prefix,
+                root=ROOT, verbose=True,
+            )
+    if st.session_state.get("sensor_report"):
+        return {"mode": "sensor", "report": st.session_state["sensor_report"]}
+    return {"error": "Press the button to start registration.", "notes": {}}
 
 
 def _execute(mode, normalize, equal_gsd, use_cached):

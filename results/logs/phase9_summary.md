@@ -66,3 +66,16 @@ gaps these sensors present, **without disturbing the working Phase 8 code**
 - Branch: `phase-9-cross-modal-tmc-iirs`
 - Rollback anchor (untouched): git tag `phase8-ok` at `5a599f0`, pushed.
 - Status after this summary: commit + push pending (completed at end of phase).
+
+## Streamlit multi-sensor UI (Phase 9)
+
+- demo/app.py: added "Multi-sensor registration (TMC / IIRS)" one-click mode.
+- Two disambiguooted presets: TMC-2026 <-> OHRC-2026 (dark/low-sun, geometry
+  fallback) and IIRS-2021 <-> OHRC-2021 (content-only, honest verdict).
+- Auto-extracts the TMC .img/.csv from its zip on first run.
+- Friendly verdict banners (registered / geometry-registered / not-registered),
+  plain-language explanations for dark/low-sun geometry fallback, footprint +
+  image-quality captions, ground images, expandable technical notes.
+- Uses run_sensor_auto / run_auto / run_experiment (no logic duplicated).
+- Verified: AppTest one-click TMC flow -> "Registered by geometry", GSD 21.70 m/px,
+  zero exceptions, zero deprecation warnings; suite 64 passed.
