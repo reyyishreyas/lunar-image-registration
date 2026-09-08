@@ -40,6 +40,29 @@ OHRC_WS_FACTOR = 10  # working-set downsampling factor for OHRC
 NAC_WS_FACTOR = 8  # working-set downsampling factor for LRO NAC
 
 
+def ws_scale(H):
+    """Mean ground scale of H (ohrc_ws px -> nac_ws px).
+
+    For a homography, the local linear part is H[:2, :2]; the length of an
+    OHRC working-set unit vector after mapping equals the number of NAC
+    working-set pixels it spans. mean(|H*u_x|, |H*u_y|) is that factor.
+    """
+    a = np.asarray(H, np.float64)[:2, :2]
+    vx = np.linalg.norm(a[:, 0])
+    vy = np.linalg.norm(a[:, 1])
+    return float(0.5 * (vx + vy))
+
+
+def refine_ws_factor(fac, scale, lo=1, hi=256):
+    """Next NAC working-set factor so OHRC and NAC working sets share a GSD.
+
+    An OHRC working set at native scale s_ohrc and NAC set at s_nac*fac are
+    equal-GSD iff s_ohrc = s_nac*fac*scale(H), i.e. fac' = fac*scale(H).
+    """
+    f = int(round(float(fac) * float(scale)))
+    return int(min(max(f, lo), hi))
+
+
 def read_ohrc_raw(img_path: str) -> np.ndarray:
     """Read the full raw OHRC .img as uint8 (scan, pixel).
 
@@ -468,7 +491,8 @@ def _set_georeference_pair(ohrc, ohrc_ws, nac, pix_axis, scan_axis, lon_grid,
 
 
 def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
-                      crop_px=1024, prefix="pair1"):
+                      crop_px=1024, prefix="pair1", equal_gsd=False,
+                      nac_geom_csv=""):
     """Crop a pair to 1024x1024 same-ground-area; write PNGs + JSON.
 
     Outputs are named `{prefix}_src.png`, `{prefix}_ref.png` and
@@ -481,7 +505,15 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
          <20 inliers.
     If both fail, a full candidate-statistics diagnostic is written to
     `georef_{prefix}_diagnostics.json` and RuntimeError is raised.
+
+    equal_gsd=True self-calibrates the NAC working-set factor (no fixed
+    `nac_fac` guess): the homography's scale tells the OHRC<->NAC working-set
+    ground-scale ratio, so the NAC working set is re-sampled until both
+    working sets share the same ground resolution. nac_geom_csv (NAC per-line
+    SPICE geometry CSV) seeds the first guess from ground GSDs when given.
     """
+    from src.preprocessing.geometry import _gsd_from_geometry
+
     os.makedirs(out_dir, exist_ok=True)
 
     ohrc = read_ohrc_raw(ohrc_img_path)
@@ -489,12 +521,41 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
     nac = read_nac_img(nac_img_path)
     pix_axis, scan_axis, lon_grid, lat_grid = read_ohrc_ground_grid(ohrc_csv_path)
 
-    t = find_pair_transform(ohrc_ws, nac)
+    fac = NAC_WS_FACTOR
+    ws_iters = None
+    if equal_gsd:
+        m_scan, m_px = _gsd_from_geometry(scan_axis, pix_axis,
+                                          lon_grid, lat_grid)
+        gsd_ohrc_ws = OHRC_WS_FACTOR * 0.5 * (m_scan + m_px)
+        if nac_geom_csv:
+            lo, la, ln, sm = _nac_geom_rows(nac_geom_csv)
+            fac0 = _nac_gsd_seed(lo, la, ln, sm, gsd_ohrc_ws)
+        else:
+            fac0 = NAC_WS_FACTOR
+        fac = fac0
+        ws_iters = []
+        for _ in range(4):
+            t = find_pair_transform(ohrc_ws, nac, nac_fac=fac)
+            if t is None:
+                ws_iters.append(dict(fac=fac, scale=None))
+                break
+            scale = ws_scale(t["H"])
+            f_new = refine_ws_factor(fac, scale)
+            ws_iters.append(dict(fac=fac, scale=round(scale, 4), next_fac=f_new))
+            if f_new == fac or abs(f_new - fac) <= 1:
+                fac = f_new
+                break
+            fac = f_new
+        else:
+            ws_iters.append(dict(fac=fac, scale=None, not_converged=True))
+            fac = refine_ws_factor(fac, ws_iters[-2]["scale"])
+
+    t = find_pair_transform(ohrc_ws, nac, nac_fac=fac)
     method = "sparse-sift"
     diag = {}
     if t is None or t["inliers"] < 20:
-        diag["primary"] = candidate_stats(ohrc_ws, nac)
-        t2, robust_stats = find_pair_transform_robust(ohrc_ws, nac)
+        diag["primary"] = candidate_stats(ohrc_ws, nac, nac_fac=fac)
+        t2, robust_stats = find_pair_transform_robust(ohrc_ws, nac, nac_fac=fac)
         if t2 is None:
             diag["robust"] = robust_stats
             diag["robust_rejected"] = (
@@ -515,9 +576,45 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
     meta = _set_georeference_pair(ohrc, ohrc_ws, nac, pix_axis, scan_axis,
                                   lon_grid, lat_grid, t, out_dir, crop_px, prefix)
     meta["georef_method"] = method
+    if equal_gsd:
+        meta["equal_gsd"] = True
+        meta["ws_factor_iters"] = ws_iters
+        meta["nac_ws_factor_final"] = fac
     with open(os.path.join(out_dir, f"georef_{prefix}.json"), "w") as fh:
         json.dump(meta, fh, indent=2)
     return meta
+
+
+def _nac_geom_rows(csv_path):
+    """Read the NAC per-line SPICE geometry CSV back into raw column arrays."""
+    with open(csv_path, newline="") as fh:
+        rr = [[float(v) for v in r.split()] for r in fh if r.strip()]
+    a = np.asarray(rr, np.float64)
+    return a[:, 0], a[:, 1], a[:, 3], a[:, 4]
+
+
+def _nac_gsd_seed(lo, la, ln, sm, gsd_ohrc_ws):
+    """Seed NAC working-set factor so GSD ~= OHRC working-set GSD.
+
+    Uses the median across-track (sample) and along-track (line) ground
+    spacing within the NAC geometry grid as the per-pixel meters.
+    """
+    lo_r = np.asarray(lo, np.float64) % 360.0
+    lat_r = np.asarray(la, np.float64)
+    if lo_r.size < 2 or lat_r.size < 2:
+        return NAC_WS_FACTOR
+    lat_m = 111000.0
+    lon_m = 111000.0
+    d = np.sqrt((np.diff(lo_r) * lon_m * np.cos(np.deg2rad(lat_r[:-1]))) ** 2
+                + (np.diff(lat_r) * lat_m) ** 2)
+    order = np.argsort(np.abs(ln[:-1] - ln[1:]))
+    d_line = np.median(d[order[:100]]) if d.size else np.nan
+    order_s = np.argsort(np.abs(sm[:-1] - sm[1:]))
+    d_samp = np.median(d[order_s[:100]]) if d.size else np.nan
+    gsd_nac = np.nanmedian([d_line, d_samp])
+    if not np.isfinite(gsd_nac) or gsd_nac <= 0:
+        return NAC_WS_FACTOR
+    return int(min(max(int(round(gsd_ohrc_ws / gsd_nac)), 1), 256))
 
 
 if __name__ == "__main__":

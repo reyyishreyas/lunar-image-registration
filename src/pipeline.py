@@ -49,6 +49,8 @@ def maybe_georeference(cfg):
         out_dir=_abs(out),
         crop_px=pre.get("crop_px", 1024),
         prefix=pre.get("prefix", "pair1"),
+        equal_gsd=bool(pre.get("equal_gsd", False)),
+        nac_geom_csv=pre.get("nac_geom_csv", ""),
     )
     return meta
 
@@ -77,6 +79,12 @@ def apply_normalize(src, ref, ncfg):
         return (apply_clahe(src, clip_limit=clip, tile_grid=tile),
                 apply_clahe(ref, clip_limit=clip, tile_grid=tile),
                 f"clahe:{clip}")
+    if method == "edges":
+        from src.preprocessing.normalize import apply_edges
+        alpha = float(ncfg.get("alpha", 1.0))
+        return (apply_edges(src, alpha=alpha),
+                apply_edges(ref, alpha=alpha),
+                "edges")
     if method == "gamma_shadow":
         from src.preprocessing.shadow_correct import gamma_shadow_correct
         gamma = float(ncfg.get("gamma", 0.5))

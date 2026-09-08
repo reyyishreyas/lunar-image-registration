@@ -47,3 +47,32 @@ def apply_clahe(img, clip_limit=2.0, tile_grid=8):
     clahe = cv2.createCLAHE(clipLimit=float(clip_limit),
                             tileGridSize=(int(tile_grid), int(tile_grid)))
     return clahe.apply(img)
+
+
+def apply_edges(img, alpha=1.0):
+    """Edge-gradient preconditioning (Sobel magnitude -> uint8).
+
+    Pure geometric cue: maximal gradient magnitude across both axes, normalized
+    to full uint8 range. Useful for equal-GSD staging where radiometric content
+    differs between sensors but edge geometry agrees (e.g. grazing-illumination
+    pairs).
+
+    Args:
+        img: uint8 grayscale image (H, W).
+        alpha: gradient gain before normalization (1.0 = full range).
+
+    Returns:
+        uint8 image (H, W) of normalized Sobel magnitude.
+    """
+    if img is None or img.ndim != 2:
+        raise ValueError("apply_edges expects a grayscale image")
+    if img.dtype != np.uint8:
+        raise ValueError("apply_edges expects uint8 input")
+    gx = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.sqrt(gx * gx + gy * gy)
+    lo, hi = np.percentile(mag, [1, 99])
+    if hi <= lo:
+        hi = lo + 1e-6
+    out = np.clip((mag - lo) / (hi - lo) * 255.0 * alpha, 0, 255)
+    return out.astype(np.uint8)

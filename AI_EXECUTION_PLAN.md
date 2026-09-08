@@ -558,9 +558,26 @@ Restart phases (each gets its own branch off updated main, per AGENTS.md):
       content matching.
   RESULT: pass — `data/processed/georef_phase5.json`, grid 1536×194 @ 60 m, coverage
       in_bounds_frac 1.0, pos_err_km_mean 5.9e-13.
-- [ ] Next step (not started): make every matching stage operate at a common GSD
-      (no more fixed `nac_fac` guesses), add per-config photometric
-      preconditioning (`none | clahe | edges`), and re-run FINAL_CONFIG on pair 1
-      as regression.
-  RESULT: pass (regression only) — FINAL_CONFIG pair 1: RMSE 22.6172 px, 235
-      inliers, ratio 0.8217, identical to Phase 4 champion (49ea6e9 baseline).
+- [x] Equal-GSD working-set staging (no fixed `nac_fac` guess) + per-config
+      photometric preconditioning (`none | clahe | edges`):
+      `georeference_pair(equal_gsd=True)` self-calibrates the NAC working-set
+      factor from the overlap homography's ground-scale ratio (`ws_scale`,
+      `refine_ws_factor`), seeding from a NAC SPICE geometry CSV when provided;
+      Sobel-edge preconditioning added as `normalize.method: edges`
+      (`apply_edges`). Configs `experiment_C13_equal_gsd.yaml` (FINAL base +
+      equal-GSD) and `experiment_C14_edges.yaml` (FINAL base + edges) probe
+      each knob; champion FINAL_CONFIG path unchanged (equal_gsd defaults off).
+  RESULT: pass — C13 self-calibration converged 8 -> 3 (fresh guess was ~2.7x
+      too coarse; scale 0.39 then 1.03 at lock): 245 inliers / 0.8249 vs FINAL
+      235 / 0.8217, RMSE 26.98 vs the fixed GT (GT is anchored to the old crop
+      window, so RMSE is not directly comparable). C14 edges preconditioning
+      collapsed matches to 10 inliers (RMSE 742.1) — gradients-only kills the
+      grainy OHRC content; CLAHE stays the champion preconditioner. FINAL_CONFIG
+      regression (native path): RMSE 22.6172 px, 235 inliers, ratio 0.8217 —
+      unchanged. Details: `results/logs/phase1_restart_staging.md`.
+- [ ] Next step (not started): re-run the full pair-1 matching stages through a
+      single ground-resolved staging entry point (the crop PNG path already
+      stages at common GSD; remaining work is a shared `stage_pair()` API
+      consumed by detection/matching so no stage re-derives GSD) and re-verify
+      the FINAL_CONFIG regression. Pair 2 content matching stays
+      geometry-resolved per `results/logs/pair2_photometric_gap.md`.
