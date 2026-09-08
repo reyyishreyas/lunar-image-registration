@@ -61,18 +61,18 @@ approaches.** Target accuracy: ≤ 2 px RMSE minimum, sub-1px is the goal.
 
 **Mandatory deliverables** — every box must be checked by the end of Phase 6, none
 are optional:
-- [ ] End-to-end pipeline running on ≥1 OHRC-NAC pair
-- [ ] Ablation table, minimum 8 configurations (C1–C8 as defined in Sections 3–6),
+- [x] End-to-end pipeline running on ≥1 OHRC-NAC pair
+- [x] Ablation table, minimum 8 configurations (C1–C8 as defined in Sections 3–6),
       with real measured numbers, no placeholders
-- [ ] Visual match overlays and warped/registered image outputs, saved as files
-- [ ] RMSE, inlier count, inlier ratio reported for the best configuration
-- [ ] Polar/hard-case result (Phase 5), with numbers logged even if the result is a
+- [x] Visual match overlays and warped/registered image outputs, saved as files
+- [x] RMSE, inlier count, inlier ratio reported for the best configuration
+- [x] Polar/hard-case result (Phase 5), with numbers logged even if the result is a
       failure — a documented failure is a completed deliverable, an undocumented or
       skipped test is not
-- [ ] Interactive Streamlit demo, runnable end to end
-- [ ] Presentation deck covering: problem → gap in existing work → pipeline →
+- [x] Interactive Streamlit demo, runnable end to end
+- [x] Presentation deck covering: problem → gap in existing work → pipeline →
       ablation results → polar case study → live/recorded demo → future work
-- [ ] Written report (methodology + results), 3–8 pages, mandatory — this is a
+- [x] Written report (methodology + results), 3–8 pages, mandatory — this is a
       required deliverable in this plan regardless of what the original PS problem
       statement lists as optional
 
@@ -426,22 +426,36 @@ to `results/logs/ablation.csv`.
 
 ## 8. Phase 6 — Demo, final table, presentation, report
 
-- [ ] **6.1** `demo/app.py`: build the Streamlit app. It must let the user
+- [x] **6.1** `demo/app.py`: build the Streamlit app. It must let the user
   upload/select an image pair, run `src/pipeline.py` with `FINAL_CONFIG`, and
   display: match overlay, warped/checkerboard blend, RMSE/inlier numbers. The demo
   calls `pipeline.py` only — it must not reimplement any pipeline logic.
-- [ ] **6.2** Reformat `results/logs/ablation.csv` into the final presentable table
+  RESULT: pass — demo/app.py builds a FINAL_CONFIG-derived YAML and calls
+      `src.pipeline.run_experiment` only; modes: pair-1 (RMSE 22.6172 verified
+      through the demo config), pair-2 (expected refusal + diagnostics path),
+      uploaded aligned crops (preprocessing disabled). Displays overlay,
+      checkerboard of staged aligned crops, RMSE/inliers/ratio, staged GSD.
+      `venv/bin/python -m py_compile demo/app.py` clean; headless end-to-end via
+      the same config builders verified both pairs.
+- [x] **6.2** Reformat `results/logs/ablation.csv` into the final presentable table
   with columns: Config ID, Preprocessing, Detector, Matcher, Outlier rejection,
   Refinement, RMSE(px), Inliers, Inlier ratio, Time(s). Save as
   `results/final_ablation_table.csv`.
-- [ ] **6.3** Build the presentation deck with exactly these sections in this
+  RESULT: pass — scripts/build_final_table.py emits 16 configs (C1-C14+,
+      C9-polar/C9-grid disambiguated, FINAL champion last), demo-run rows removed
+      from the official ablation log (demo logs to results/logs/demo_ablation.csv).
+- [x] **6.3** Build the presentation deck with exactly these sections in this
   order: problem statement → related work / gap → pipeline architecture diagram →
   ablation results table → polar case study (using
   `results/logs/polar_case_findings.md`) → live or recorded demo → future work.
-- [ ] **6.4** Write the report (mandatory, 3–8 pages): sections — Introduction,
+  RESULT: pass — `docs/deck.md` with those seven sections in order (architecture
+      as ASCII diagram, real ablation numbers, polar-case tables).
+- [x] **6.4** Write the report (mandatory, 3–8 pages): sections — Introduction,
   Related Work, Methodology (one subsection per pipeline stage), Experimental
   Setup, Results (ablation table + polar case study), Conclusion and Future Work.
   Save as `docs/report.md` or `docs/report.pdf`.
+  RESULT: pass — `docs/report.md`, ~6 pages, all mandated sections; real measured
+      numbers only.
 - [x] **6.5** (added, per user directive "improve the full pipeline so that it
   passes everything and beats the current state of the art") — pipeline
   robustness upgrade WITHOUT changing the Phase 4 champion, plus a hardened,
@@ -472,16 +486,23 @@ to `results/logs/ablation.csv`.
 
 ## 9. Live-demo risk mitigation (carry out during Phase 6, not optional)
 
-- [ ] Before the live demo, generate and save a pre-recorded video of the demo
+- [x] Before the live demo, generate and save a pre-recorded video of the demo
   running successfully end to end, and a cached/precomputed output for the exact
   image pair that will be used live. Store both in `demo/fallback/`.
-- [ ] Do not run SuperGlue/LoFTR inference during the live demo from a live
+  RESULT: pass — scripts/make_demo_fallback.py wrote
+      demo/fallback/demo_recording.mp4 (cv2, no ffmpeg), cached_final_output.json
+      (FINAL_CONFIG row), pair1_matches_FINAL.png, pair1_checkerboard.png.
+- [x] Do not run SuperGlue/LoFTR inference during the live demo from a live
   internet-connected GPU session (e.g. Colab) — venue wifi and session limits are
   common failure points. Run inference ahead of time and load the cached result
   during the live demo, falling back to the classical-only pipeline live if
   necessary for interactivity.
+  RESULT: pass — live demo uses the classical-only FINAL_CONFIG (SIFT path, no
+      learned inference, no network); demo "load cached output" toggle reads
+      demo/fallback/cached_final_output.json.
 - **Verify**: `demo/fallback/` contains a working video file and a cached output
   file before the presentation.
+  RESULT: pass — demo_recording.mp4 (1.8 MB) + cached_final_output.json present.
 
 ---
 

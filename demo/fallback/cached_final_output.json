@@ -1,0 +1,12 @@
+{
+  "config": "results/final_config.yaml",
+  "pair": "phase1",
+  "rmse": 22.6172,
+  "inliers": 235,
+  "inlier_ratio": 0.8217,
+  "n_matches": 286,
+  "time_s": 1.14,
+  "fig": "demo/fallback/pair1_matches_FINAL.png",
+  "checker": "demo/fallback/pair1_checkerboard.png",
+  "video": "demo/fallback/demo_recording.mp4"
+}

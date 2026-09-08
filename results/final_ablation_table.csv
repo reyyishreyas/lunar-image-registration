@@ -1,0 +1,17 @@
+Config ID,Preprocessing,Detector,Matcher,Outlier rejection,Refinement,RMSE(px),Inliers,Inlier ratio,Time(s)
+C1,georef+normalize (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6614,56,0.918,61
+C2,georef+histmatch (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6605,223,0.6862,325
+C3,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6316,236,0.8252,286
+C4,georef+gamma_shadow:0.5 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,8353.4457,6,0.15,40
+C5,georef+clahe:4.0 (crop 1024x1024),akaze,bf_ratio:0.75,ransac:5.0,,22.8034,793,0.8084,981
+C6,georef+clahe:4.0 (crop 1024x1024),rift2,rift2:0.95,ransac:5.0,,500.4704,193,0.2144,900
+C7,georef+clahe:4.0 (crop 1024x1024),superpoint,superglue:0.2,ransac:5.0,,22.6703,137,0.5983,229
+C8,georef+clahe:4.0 (crop 1024x1024),superpoint,loftr:0.2,ransac:5.0,,22.6557,4583,0.673,6810
+C9-polar,polar test sun_el=1.9deg (OHRC-2026+NAC M1127547939RC),sift,bf_ratio:0.75,usac_magsac:5.0,,FAIL,0,0,0
+C9-grid,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6386,114,0.8085,141
+C10,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6172,235,0.8217,286
+C11,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,cornerSubPix,22.65,235,0.8217,286
+C12,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,phase_corr,22.6379,235,0.8217,286
+C13,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,26.977,245,0.8249,297
+C14,georef+edges (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,742.1478,10,0.5882,17
+FINAL,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6172,235,0.8217,286
