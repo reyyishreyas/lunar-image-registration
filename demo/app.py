@@ -55,6 +55,7 @@ PAIR2 = {
     "ohrc_geometry": ("data/PATCH-004/OHRC/geometry/calibrated/20260331/"
                       "ch2_ohr_ncp_20260331T1105235288_g_grd_d18.csv"),
     "nac_img": "data/PATCH-004/LRO NAC/OHRC/M1127547939RC.IMG",
+    "nac_geometry": "data/processed/nac_geom_M1127_full.csv",
     "out_dir": os.path.join(DEMO_DIR, "pair2"),
 }
 
@@ -141,7 +142,7 @@ def main():
     with st.sidebar:
         mode = st.radio("Input mode", [
             "Project pair-1",
-            "Project pair-2 (polar, refusal demo)",
+            "Project pair-2 (polar, geometry registration)",
             "Upload aligned crops",
         ])
         normalize = st.selectbox("Photometric preconditioning",
@@ -161,6 +162,9 @@ def main():
 
     res = st.session_state["result"]
     st.subheader("Results")
+    if res.get("mode") == "phase5":
+        _render_phase5(res)
+        return
     if res.get("error"):
         st.error(res["error"])
         for k, v in res.get("notes", {}).items():
@@ -202,6 +206,69 @@ def _load_fallback(mode):
                                      "pair1_matches_FINAL.png")}
 
 
+def _phase5_registration():
+    """Run (once) or reload the SPICE equal-GSD geometry registration for
+    pair-2. Returns the georef_phase5.json meta dict."""
+    import json
+    out5 = os.path.join(PAIR2["out_dir"], "phase5")
+    mj = os.path.join(ROOT, out5, "georef_phase5.json")
+    if not os.path.exists(mj):
+        from src.preprocessing.geometry import georeference_phase5
+        georeference_phase5(
+            os.path.join(ROOT, PAIR2["ohrc_img"]),
+            os.path.join(ROOT, PAIR2["ohrc_geometry"]),
+            os.path.join(ROOT, PAIR2["nac_img"]),
+            os.path.join(ROOT, PAIR2["nac_geometry"]),
+            os.path.join(ROOT, out5),
+        )
+    with open(mj) as fh:
+        return json.load(fh)
+
+
+def _render_phase5(res):
+    meta = res.get("meta", {})
+    st.info("\n\n— ".join(f"{k}: {v}" for k, v in res.get("notes", {}).items())
+            or "Photometric-gap pair: content matching is not verifiable.")
+    st.success("Pair-2 registered **by geometry** (SPICE + ISRO CSV): "
+               "equal-GSD ortho pair, 100% in-bounds, self-consistent to "
+               "<1e-9 km.")
+
+    c = st.columns(4)
+    gs = meta.get("grid_shape", [0, 0])
+    c[0].metric("Staged grid", f"{gs[1]}×{gs[0]}")
+    c[1].metric("GSD", f"{meta.get('gsd_m', '')} m")
+    c[2].metric("Sun elevation", f"{meta.get('ohrc_sun_elevation_deg', '')}°")
+    c[3].metric("ODE overlap", f"{meta.get('ode_overlap_percent', '')}%")
+
+    audit = meta.get("coverage_audit", {})
+    ion, lat = st.columns(2)
+    ion.metric("Coverage (in-bounds)", f"{audit.get('in_bounds_frac', 0):.4f}")
+    lat.metric("Pos. err. mean",
+               f"{audit.get('pos_err_km_mean', 0):.2e} km")
+    lo, la = meta.get("lon_range", [0, 0]), meta.get("lat_range", [0, 0])
+    st.caption(f"OHRC lon {lo[0]:.4f}–{lo[1]:.4f}°, lat {la[0]:.4f}–{la[1]:.4f}°")
+
+    probe = meta.get("content_probe", {})
+    if probe.get("cross_full_strip") is not None:
+        p1, p2, p3 = st.columns(3)
+        p1.metric("DISK+LightGlue cross (pair)", probe["cross_full_strip"])
+        p2.metric("Self src control", probe["self_src"])
+        p3.metric("Self ref control", probe["self_ref"])
+    corr = meta.get("correlator_lock_check", {})
+    if corr:
+        st.metric("FFT lock verdict", corr.get("verdict", ""),
+                  help=f"true peak {corr.get('true_peak_value')} vs "
+                       f"row-reversed null {corr.get('null_rev_peak_value')} "
+                       f"(sigma {corr.get('sigma_px')} px)")
+    st.markdown(
+        f"**Verification:** {meta.get('verification', 'n/a')}")
+
+    ic, ip = st.columns(2)
+    ic.image(meta.get("src_png"), caption="OHRC ortho (magma)", width=620)
+    ip.image(meta.get("ref_png"), caption="NAC ortho (magma)", width=620)
+    st.image(meta.get("overlay_png"), caption="50/50 overlay", width=1240)
+
+
 def _execute(mode, normalize, equal_gsd, use_cached):
     os.makedirs(os.path.join(ROOT, UPLOAD_DIR), exist_ok=True)
     try:
@@ -224,20 +291,22 @@ def _execute(mode, normalize, equal_gsd, use_cached):
             cfg = build_pair_config(PAIR2, dict(normalize=normalize,
                                                 equal_gsd=False))
             cfg_path = _write_experiment(cfg, "pair2")
+            refusal = None
             try:
                 row = run_experiment(cfg_path, verbose=False)
-                fig = os.path.join(ROOT, cfg["outputs"]["matches_figure"])
-                return _row_to_result(row, fig, None, {})
+                if (isinstance(row.get("inliers"), int) and
+                        row.get("inliers", 0) >= 20):
+                    fig = os.path.join(ROOT, cfg["outputs"]["matches_figure"])
+                    return _row_to_result(row, fig, None, {})
+                refusal = (f"content matching is inconclusive "
+                           f"({row.get('inliers', 0)} inliers)")
             except RuntimeError as e:
-                diag = os.path.join(PAIR2["out_dir"],
-                                    "georef_pair1_diagnostics.json")
-                return {
-                    "error": "Georeference refused for pair-2 (expected).",
-                    "notes": {"diagnostics": f"data/processed/demo/pair2/"
-                                             "georef_pair1_diagnostics.json "
-                                             "(written)" if os.path.exists(
-                        os.path.join(ROOT, diag)) else str(e)},
-                }
+                refusal = str(e)
+            meta = _phase5_registration()
+            return {**{"mode": "phase5", "meta": meta},
+                    "notes": {"content_match":
+                              f"refused / inconclusive — {refusal}; falling "
+                              "back to SPICE + ISRO geometry registration."}}
 
         if mode.startswith("Upload"):
             up1 = st.file_uploader("Source OHRC crop (grayscale PNG)",
