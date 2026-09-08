@@ -189,6 +189,23 @@ def main():
     gsd = res.get("gsd_m")
     if gsd:
         st.caption(f"Staged common GSD: {gsd} m/px")
+    gt = res.get("gt")
+    if gt:
+        gt_path = os.path.join(ROOT, gt)
+        import numpy as _np
+        n_pts = "?"
+        try:
+            n_pts = len(_np.loadtxt(gt_path, delimiter=",", skiprows=1))
+        except Exception:
+            pass
+        rmse_val = res.get("rmse")
+        is_subpx = isinstance(rmse_val, (int, float)) and 0 < rmse_val < 1.0
+        st.caption(
+            f"Evaluation reference: `{gt}` ({n_pts} sub-pixel control points).")
+        if is_subpx:
+            st.success(
+                f"**Sub-pixel registration**: RMSE {rmse_val:.4f} px "
+                "< 1.0 px target.")
     err = res.get("notes")
     if err:
         st.caption(err)
@@ -202,6 +219,7 @@ def _load_fallback(mode):
     with open(cache) as fh:
         d = json.load(fh)
     d["notes"] = {"source": "cached demo/fallback/cached_final_output.json"}
+    d.setdefault("gt", d.get("ground_truth"))
     return {**d, "fig": os.path.join(ROOT, "results", "figures",
                                      "pair1_matches_FINAL.png")}
 
@@ -285,7 +303,8 @@ def _execute(mode, normalize, equal_gsd, use_cached):
             fig = os.path.join(ROOT, cfg["outputs"]["matches_figure"])
             checker = _checker_from_cfg(cfg)
             meta = _read_meta(cfg)
-            return _row_to_result(row, fig, checker, meta)
+            return _row_to_result(row, fig, checker, meta,
+                                  gt=cfg.get("ground_truth", ""))
 
         if mode.startswith("Project pair-2"):
             cfg = build_pair_config(PAIR2, dict(normalize=normalize,
@@ -337,7 +356,7 @@ def _execute(mode, normalize, equal_gsd, use_cached):
         return {"error": str(e), "notes": {}}
 
 
-def _row_to_result(row, fig, checker, meta):
+def _row_to_result(row, fig, checker, meta, gt=""):
     out = {
         "rmse": row.get("rmse_px", ""),
         "inliers": row.get("inliers", 0),
@@ -347,6 +366,7 @@ def _row_to_result(row, fig, checker, meta):
         "fig": fig if os.path.exists(fig) else None,
         "checker": checker,
         "gsd_m": meta.get("crop_gsd_m") if meta else None,
+        "gt": gt,
         "notes": {},
         "error": None,
     }

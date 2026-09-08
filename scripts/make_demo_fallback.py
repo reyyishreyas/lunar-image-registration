@@ -105,12 +105,16 @@ def main():
 
     cache = {"config": "results/final_config.yaml",
              "pair": "phase1",
-             "rmse": row["rmse_px"], "inliers": row["inliers"],
+             "ground_truth": None, "rmse": row["rmse_px"],
+             "inliers": row["inliers"],
              "inlier_ratio": row["inlier_ratio"], "n_matches": row["n_matches"],
              "time_s": row["time_s"],
              "fig": fig_p.replace(ROOT + "/", ""),
              "checker": checker_p.replace(ROOT + "/", ""),
              "video": video_p.replace(ROOT + "/", "")}
+    import yaml
+    with open(os.path.join(ROOT, FINAL_CONFIG)) as fh:
+        cache["ground_truth"] = yaml.safe_load(fh).get("ground_truth")
     with open(FALLBACK_OUT, "w") as fh:
         json.dump(cache, fh, indent=2)
 
