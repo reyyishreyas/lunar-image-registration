@@ -616,3 +616,43 @@ Restart phases (each gets its own branch off updated main, per AGENTS.md):
       path kept at parity). Unit coverage in `tests/test_staging.py`.
   RESULT: pass — full suite 24 tests; FINAL_CONFIG pair-1 regression after
       refactor: RMSE 22.6172 px, 235 inliers, ratio 0.8217 — unchanged.
+
+## 12. Phase 8 — Fully-automatic registration pipeline (user directive 2026-09-08)
+
+Directive: "make a definite pipeline in which we can just put images and it will
+automatically do everything and give me the final output as its showing with
+pair." Inputs = OHRC `.img` + ISRO geometry CSV + NAC `.IMG`; delivery = **both** a
+CLI and a one-click Streamlit automatic page. There is **no manual mode
+selection** — the pipeline detects the pair automatically.
+
+- [x] 12.1 Build `src/auto_pipeline.py`: single auto entry point that (a) stages
+       OHRC<->NAC to a common ground grid via the existing georeference /
+       `stage_pair` path, (b) detects + matches + robust-fits the champion
+       config (SIFT + CLAHE + USAC_MAGSAC), (c) iteratively tightens to a
+       sub-pixel set, (d) **decides automatically**: content registration vs
+       geometry-only (SPICE + ISRO CSV, pair-2 photometric gap) vs explicit
+       non-registration, (e) emits one JSON report + match overlay + checkerboard.
+       Deterministic via `cv2.setRNGSeed` / `np.random.seed` (flip decision
+       reproducible) and `fresh` (clears stale staged crops so a prior equal-GSD
+       run cannot leak its orientation in). Never silently returns garbage.
+       RESULT: pass — pair-1 auto: RMSE 0.5493 px (GT v2), 123 inliers /
+       0.4301, 286 matches; pair-2 auto: no-content -> geometry fallback
+       (SPICE+ISRO, GSD 60 m) — both fully automatic.
+- [x] 12.2 CLI `scripts/run_auto.py`: one command accepting the three inputs
+       (+ optional NAC geometry / ground-truth), writes `report.json` + figures.
+       RESULT: pair-1 `REGISTERED (content) RMSE=0.5493 px`; pair-2
+       `GEOMETRY REGISTERED (no content) GSD=60 m`; exit 0 on success.
+- [x] 12.3 Streamlit automatic page (demo/app.py "Automatic registration" mode):
+       one-click, picks preset pair or runs the three-file inputs through
+       `src.auto_pipeline.run_auto` (no reimplemented logic), renders verdict,
+       RMSE vs reference, self-RMSE, inliers, method: GSD, and figures.
+       RESULT: `_execute_auto` + `_render_auto` wired; app imports cleanly.
+- [x] 12.4 Tests: `tests/test_auto_pipeline.py` (LSQ homography, homography
+       apply, sub-pixel tightening recovers/ignores outliers, RMSE, report
+       round-trip, summarize) + real-data CLI verification. RESULT: 34 tests
+       pass (24 + 10 new).
+- [x] 12.5 Phase 8 summary written under `results/logs/phase8_automatic_pipeline.md`.
+
+## 13. Mandatory Phase Summary (Phase 8)
+
+Produced at the end of Phase 8 per AGENTS.md rules (see branch push + report).

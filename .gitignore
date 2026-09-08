@@ -26,6 +26,7 @@ results/logs/*
 
 .env
 ._*
+.fuse_hidden*
 
 # Phase 3 vendored third-party pretrained weights + sample media (re-downloadable;
 # URLs logged in results/logs/phase3_summary.md). Keeps the repo lean while the
