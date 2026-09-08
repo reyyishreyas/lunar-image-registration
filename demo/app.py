@@ -190,6 +190,48 @@ def _render_ground_artifacts(rep, src_name="Source", ref_name="Reference"):
                  width="stretch")
 
 
+def _render_before_after(rep, src_name="Source", ref_name="Reference"):
+    """Original raw strips ('before') next to the registered common-grid pair
+    ('after'), so users can see exactly what the pipeline did."""
+    arts = rep.get("artifacts") or {}
+    gsd = rep.get("gsd_m")
+    gsd_txt = f" ({float(gsd):.2f} m/px)" if isinstance(gsd, (int, float)) else ""
+    ok_verdict = rep.get("verdict") in ("registered", "geometry_registered")
+    after_txt = ("registered on the same ground grid"
+                 if ok_verdict else "processed working crops (enhanced)")
+
+    st.markdown("#### Before → After")
+    a, b = st.columns(2)
+    o_src, o_ref = arts.get("original_src"), arts.get("original_ref")
+    bcap_before_src = f"**Before · {src_name}** raw strip (display-stretched)"
+    bcap_before_ref = f"**Before · {ref_name}** raw strip (display-stretched)"
+    if o_src and os.path.exists(os.path.join(ROOT, o_src)):
+        a.image(os.path.join(ROOT, o_src), caption=bcap_before_src,
+                width="stretch")
+    elif arts.get("src") and os.path.exists(os.path.join(ROOT, arts["src"])):
+        a.image(os.path.join(ROOT, arts["src"]), caption=bcap_before_src,
+                width="stretch")
+    if o_ref and os.path.exists(os.path.join(ROOT, o_ref)):
+        b.image(os.path.join(ROOT, o_ref), caption=bcap_before_ref,
+                width="stretch")
+    elif arts.get("ref") and os.path.exists(os.path.join(ROOT, arts["ref"])):
+        b.image(os.path.join(ROOT, arts["ref"]), caption=bcap_before_ref,
+                width="stretch")
+
+    st.markdown("⬇  **After** — both re-projected on a common geographic grid"
+                + gsd_txt)
+    c, d = st.columns(2)
+    src, ref = arts.get("src"), arts.get("ref")
+    if src and os.path.exists(os.path.join(ROOT, src)):
+        c.image(os.path.join(ROOT, src),
+                caption=f"**After · {src_name}** — {after_txt}",
+                width="stretch")
+    if ref and os.path.exists(os.path.join(ROOT, ref)):
+        d.image(os.path.join(ROOT, ref),
+                caption=f"**After · {ref_name}** — {after_txt}",
+                width="stretch")
+
+
 def _render_sensor(res):
     """Reader-friendly report of a multi-sensor (TMC / IIRS vs OHRC) run."""
     rep = res.get("report", {})
@@ -230,7 +272,7 @@ def _render_sensor(res):
             f"{r.get('lon', ['', ''])[0]:.3f}–{r.get('lon', ['', ''])[1]:.3f}°, "
             f"lat {r.get('lat', ['', ''])[0]:.3f}–{r.get('lat', ['', ''])[1]:.3f}°"
             f" · overlap: {'yes' if georef.get('overlap') else 'no'}")
-    _render_ground_artifacts(rep, src_name, ref_name)
+    _render_before_after(rep, src_name, ref_name)
     dg = rep.get("diagnostics") or {}
     if dg:
         st.caption(

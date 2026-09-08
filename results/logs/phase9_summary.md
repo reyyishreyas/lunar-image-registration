@@ -97,3 +97,16 @@ gaps these sensors present, **without disturbing the working Phase 8 code**
 - UI now renders an expandable evidence trace per result: source instrument,
   reference instrument, native GSDs, common-grid GSD, preprocessing,
   matcher/transformation, accuracy, verdict. (demo/app.py _render_pipeline_trace)
+
+## Before -> After previews in the app (UI evidence)
+
+- ch2_staging.stage_ch2_ground_pair now also writes native raw-strip "before"
+  previews (overlap window, bin-downsampled <=640px wide/1600px tall,
+  display-stretched) as original_src/original_ref artifacts; register_ch2_pair
+  and register_iirs_to_ohrc attach them to the report.
+- demo/app._render_before_after shows Before (raw strips) vs After (common-grid
+  registered pair) with instrument names and adaptive captions
+  (registered/geometry_registered -> "registered on the same ground grid";
+  not_registered -> "processed working crops (enhanced)").
+- Verified: TMC pair -> original_src 1290x103 / original_ref 1587x203 valid PNGs;
+  IIRS pair artifacts valid; suite 64 passed; AppTest renders before/after.

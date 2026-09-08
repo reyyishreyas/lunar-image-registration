@@ -168,7 +168,8 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     # OHRC reference: read the whole strip as uint8 (2-D) via the CH2 reader,
     # then lift contrast (IIRS IR vs visible OHRC differ radiometrically and the
     # OHRC may be a dark/polar hard case).
-    from src.preprocessing.ch2_staging import enhance_dark, low_contrast_score
+    from src.preprocessing.ch2_staging import (enhance_dark, low_contrast_score,
+                                                percentile_stretch)
     ohrc = read_ch2_raw(ohrc_img, ohrc_geom, width=OHRC_WIDTH)
     rows, cols = ohrc.shape
     mid = rows // 2
@@ -198,6 +199,33 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         per_band.append(rec)
 
     import json
+
+    def _bin_preview(arr, max_w=640, max_h=2048):
+        a = arr.astype(np.float32)
+        h, w = a.shape
+        s = max(1, -(-h // max_h), -(-w // max_w)) if (h > max_h or w > max_w) else 1
+        if s > 1:
+            h2, w2 = h // s * s, w // s * s
+            a = a[:h2, :w2].reshape(h2 // s, s, w2 // s, s).mean(axis=(1, 3))
+        return (percentile_stretch(a) if a.max() > a.min()
+                else np.zeros_like(a)).astype(np.uint8)
+
+    orig_iirs = iirs_bands[i] if iirs_bands.ndim == 3 else iirs_bands[0]
+    if best is not None and iirs_bands.ndim == 3:
+        bi = int(best.get("band"))
+        bl = [int(x) for x in bands]
+        if bi in bl:
+            orig_iirs = iirs_bands[bl.index(bi)]
+    ohrc_crop_before = ohrc[mid - slice_rows // 2: mid + slice_rows // 2, :]
+    prev_src = os.path.join(out_dir, f"{prefix}_original_src.png")
+    prev_ref = os.path.join(out_dir, f"{prefix}_original_ref.png")
+    cv2.imwrite(prev_src, _bin_preview(np.asarray(orig_iirs)))
+    cv2.imwrite(prev_ref, _bin_preview(ohrc_crop_before))
+    proc_src = os.path.join(out_dir, f"{prefix}_src.png")
+    proc_ref = os.path.join(out_dir, f"{prefix}_ref.png")
+    cv2.imwrite(proc_src, enhance_dark(u_ws))
+    cv2.imwrite(proc_ref, ohrc_ref)
+
     report = {
         "pair": "IIRS -> OHRC",
         "verdict": "registered" if best else "not_registered",
@@ -207,6 +235,12 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         "method": "cross_modal (geometry-dominant front-ends)",
         "ref_low_contrast": round(low_contrast_score(ohrc_ws), 3),
         "geometry_available": False,
+        "artifacts": {
+            "original_src": prev_src,
+            "original_ref": prev_ref,
+            "src": proc_src,
+            "ref": proc_ref,
+        },
         "notes": [
             "IIRS products carry no ISRO geometry CSV / ENVI map-info: ground-grid "
             "(geometry) registration is not possible for IIRS. Registration is "

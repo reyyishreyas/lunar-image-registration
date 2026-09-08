@@ -107,6 +107,36 @@ def _inverse_maps(pix_axis, scan_axis, lon_grid, lat_grid):
     return f_scan, f_pix
 
 
+def _write_original_preview(ll, scan_vals, pix_vals, path, max_w=640, max_h=1600):
+    """Write a display-ready 'before' preview: the native raw strip window that
+    the overlap box maps onto, bin-downsampled to ``max_w`` columns wide so the
+    huge CH2 products stay cheap to write. Mild percentile stretch for display
+    (the comparable raw frame would otherwise be near-black on dark/low-sun
+    products). Returns True on success."""
+    finite = np.isfinite(scan_vals) & np.isfinite(pix_vals)
+    scan = scan_vals[finite]; pix = pix_vals[finite]
+    if scan.size == 0 or pix.size == 0 or ll is None:
+        return False
+    rows, cols = ll.shape
+    s0 = max(int(np.floor(scan.min())) - 4, 0)
+    s1 = min(int(np.ceil(scan.max())) + 4, rows - 1)
+    p0 = max(int(np.floor(pix.min())) - 4, 0)
+    p1 = min(int(np.ceil(pix.max())) + 4, cols - 1)
+    if s1 <= s0 or p1 <= p0:
+        return False
+    crop = np.ascontiguousarray(ll[s0:s1, p0:p1]).astype(np.float32)
+    fac = 1
+    if crop.shape[1] > max_w or crop.shape[0] > max_h:
+        fac = max(int(np.ceil(crop.shape[1] / max_w)),
+                  int(np.ceil(crop.shape[0] / max_h)), 1)
+        h2, w2 = crop.shape[0] // fac, crop.shape[1] // fac * fac
+        crop = crop[:h2 * fac, :w2].reshape(h2, fac, w2 // fac, fac).mean(axis=(1, 3))
+    out = (percentile_stretch(crop) if crop.max() > crop.min()
+           else np.zeros_like(crop)).astype(np.uint8)
+    cv2.imwrite(path, out)
+    return True
+
+
 def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
                           src_width=None, ref_width=None, gsd=None,
                           n_along=1400, out_dir=None, prefix="ch2_pair"):
@@ -181,6 +211,12 @@ def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
         os.makedirs(out_dir, exist_ok=True)
         cv2.imwrite(os.path.join(out_dir, f"{prefix}_src.png"), src_g)
         cv2.imwrite(os.path.join(out_dir, f"{prefix}_ref.png"), ref_g)
+        prev_src = os.path.join(out_dir, f"{prefix}_original_src.png")
+        prev_ref = os.path.join(out_dir, f"{prefix}_original_ref.png")
+        ok_s = _write_original_preview(s_ll, s_scan, s_pix, prev_src)
+        ok_r = _write_original_preview(r_ll, r_scan, r_pix, prev_ref)
+        result["original_src"] = prev_src if ok_s else None
+        result["original_ref"] = prev_ref if ok_r else None
         with open(os.path.join(out_dir, f"{prefix}_stage.json"), "w") as fh:
             json.dump({k: v for k, v in result.items()
                        if not isinstance(v, np.ndarray)}, fh, indent=2)
@@ -252,6 +288,10 @@ def register_ch2_pair(src_img, src_geom, ref_img, ref_geom, *, out_dir,
     }
     report["artifacts"]["src"] = os.path.join(out_dir, f"{prefix}_src.png")
     report["artifacts"]["ref"] = os.path.join(out_dir, f"{prefix}_ref.png")
+    if st.get("original_src"):
+        report["artifacts"]["original_src"] = st["original_src"]
+    if st.get("original_ref"):
+        report["artifacts"]["original_ref"] = st["original_ref"]
     report["notes"].append(st["note"])
 
     # --- 2. content attempt on enhanced pair ---
