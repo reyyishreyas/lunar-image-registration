@@ -174,15 +174,15 @@ def _sensor_metric_cols(rep):
     return verdict
 
 
-def _render_ground_artifacts(rep):
+def _render_ground_artifacts(rep, src_name="Source", ref_name="Reference"):
     arts = rep.get("artifacts") or {}
     a, b = st.columns(2)
     src, ref = arts.get("src"), arts.get("ref")
     if src and os.path.exists(os.path.join(ROOT, src)):
-        a.image(os.path.join(ROOT, src), caption="Source (ground-ready)",
+        a.image(os.path.join(ROOT, src), caption=f"{src_name} (ground-ready)",
                 width="stretch")
     if ref and os.path.exists(os.path.join(ROOT, ref)):
-        b.image(os.path.join(ROOT, ref), caption="Reference (ground-ready)",
+        b.image(os.path.join(ROOT, ref), caption=f"{ref_name} (ground-ready)",
                 width="stretch")
     m = arts.get("matches")
     if m and os.path.exists(os.path.join(ROOT, m)):
@@ -193,6 +193,8 @@ def _render_ground_artifacts(rep):
 def _render_sensor(res):
     """Reader-friendly report of a multi-sensor (TMC / IIRS vs OHRC) run."""
     rep = res.get("report", {})
+    sensor = res.get("sensor", "tmc-ohrc")
+    src_name, ref_name = _sensor_labels(sensor)
     verdict = _sensor_metric_cols(rep)
     icon, headline, kind = _friendly_status(verdict)
     getattr(st, kind)(f"{icon} **{headline}**")
@@ -215,6 +217,9 @@ def _render_sensor(res):
                    "pipeline reports this honestly rather than returning a "
                    "guessed alignment.")
 
+    with st.expander("How this pair was registered (evidence)", expanded=True):
+        _render_pipeline_trace(rep, sensor)
+
     georef = rep.get("georef") or {}
     if georef:
         s, r = georef.get("src", {}), georef.get("ref", {})
@@ -225,7 +230,7 @@ def _render_sensor(res):
             f"{r.get('lon', ['', ''])[0]:.3f}–{r.get('lon', ['', ''])[1]:.3f}°, "
             f"lat {r.get('lat', ['', ''])[0]:.3f}–{r.get('lat', ['', ''])[1]:.3f}°"
             f" · overlap: {'yes' if georef.get('overlap') else 'no'}")
-    _render_ground_artifacts(rep)
+    _render_ground_artifacts(rep, src_name, ref_name)
     dg = rep.get("diagnostics") or {}
     if dg:
         st.caption(
@@ -237,6 +242,81 @@ def _render_sensor(res):
         with st.expander("Technical notes"):
             for n in notes:
                 st.markdown(f"- {n}")
+
+
+def _sensor_labels(sensor):
+    """Display names for each instrument in a sensor route."""
+    src = {
+        "tmc-ohrc": "TMC — Chandrayaan-2",
+        "iirs-ohrc": "IIRS — Chandrayaan-2",
+        "ohrc-nac": "OHRC — Chandrayaan-2",
+    }.get(sensor, "Source")
+    ref = {
+        "tmc-ohrc": "OHRC — Chandrayaan-2",
+        "iirs-ohrc": "OHRC — Chandrayaan-2",
+        "ohrc-nac": "LRO NAC",
+    }.get(sensor, "Reference")
+    return src, ref
+
+
+def _render_pipeline_trace(rep, sensor="tmc-ohrc"):
+    """Evidence card: instrument -> reference -> native resolution -> processing
+    -> matcher -> transformation -> accuracy. Lets an evaluator see exactly what
+    was registered and how, without digging into JSON."""
+    src_name, ref_name = _sensor_labels(sensor)
+    pair = rep.get("pair") or {}
+    georef = rep.get("georef") or {}
+    src_gr, ref_gr = georef.get("src", {}), georef.get("ref", {})
+    dg = rep.get("diagnostics") or {}
+
+    rows = [
+        ("Source (moving)", f"{src_name} · `{os.path.basename(pair.get('src', '?'))}`"),
+        ("Reference (fixed)", f"{ref_name} · `{os.path.basename(pair.get('ref', '?'))}`"),
+    ]
+    s_gsd, r_gsd = src_gr.get("gsd_m"), ref_gr.get("gsd_m")
+    rows.append(("Source native GSD",
+                 f"{s_gsd:.3f} m/px" if isinstance(s_gsd, (int, float))
+                 else "n/a (no geometry CSV)"))
+    rows.append(("Reference native GSD",
+                 f"{r_gsd:.3f} m/px" if isinstance(r_gsd, (int, float))
+                 else "n/a (no geometry CSV)"))
+    common = rep.get("gsd_m")
+    if isinstance(common, (int, float)):
+        rows.append(("Common ground-grid GSD", f"{common:.3f} m/px"))
+
+    if dg:
+        r_m = dg.get("ref_mean", 0)
+        ref_note = "dark / low-sun" if r_m < 25 else "normal lighting"
+        rows.append(("Preprocessing",
+                     "contrast enhancement (percentile stretch + low-sun path)"
+                     if (dg.get("ref_mean", 0) < 25 or
+                         dg.get("src_mean", 0) < 25)
+                     else "none needed"))
+        rows.append(("Reference frame quality",
+                     f"mean {r_m:.0f}/255 · {ref_note}"))
+
+    meth = rep.get("method") or "—"
+    if rep.get("verdict") == "registered":
+        front = meth.removeprefix("content:")
+        rows += [
+            ("Matcher", f"cross-modal ({front}) · {rep.get('n_matches', 0)} raw matches"),
+            ("Transformation", "homography (RANSAC, grid-uniform)"),
+            ("Inliers / ratio",
+             f"{rep.get('inliers', 0)} / {float(rep.get('inlier_ratio', 0)):.3f}"),
+            ("Accuracy (RMSE)", "n/a" if not isinstance(rep.get("rmse_px"), float)
+             else f"{rep['rmse_px']:.4f} px"),
+        ]
+    else:
+        rows += [
+            ("Content attempt", f"{meth} → not verifiable (dark/low-sun or featureless)"),
+            ("Transformation", "geometry placement on common ground grid"),
+            ("Accuracy (RMSE)", "n/a — no trustworthy content correspondences"),
+        ]
+    rows.append(("Verdict", rep.get("verdict") or "—"))
+
+    md = "\n".join(["| Component | Value |", "|---|---|"]
+                   + [f"| **{k}** | {v} |" for k, v in rows])
+    st.markdown(md)
 
 
 def build_pair_config(pair, overrides):
@@ -587,7 +667,8 @@ def _execute_sensor():
                 root=ROOT, verbose=True,
             )
     if st.session_state.get("sensor_report"):
-        return {"mode": "sensor", "report": st.session_state["sensor_report"]}
+        return {"mode": "sensor", "sensor": preset["sensor"],
+                "report": st.session_state["sensor_report"]}
     return {"error": "Press the button to start registration.", "notes": {}}
 
 

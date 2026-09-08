@@ -79,3 +79,21 @@ gaps these sensors present, **without disturbing the working Phase 8 code**
 - Uses run_sensor_auto / run_auto / run_experiment (no logic duplicated).
 - Verified: AppTest one-click TMC flow -> "Registered by geometry", GSD 21.70 m/px,
   zero exceptions, zero deprecation warnings; suite 64 passed.
+
+## PS-26166 review follow-up
+
+- Fact-checked an external PS review against repo state:
+  - "Sub-pixel accuracy not achieved" -> STALE: Phase 7 achieved RMSE 0.5968 px
+    (held-out) / 0.6971 px (end-to-end) on pair-1 GT v2.
+  - "Uniform match distribution not implemented" -> STALE: grid_uniform.py
+    cap_by_grid (Phase 4, C9).
+  - "22.66 px" -> correct, but that is the Phase 1 C1 classical baseline,
+    superseded by Phase 4-7 pipeline (idem 22.6172 on the old noisy GT whose
+    noise floor is ~15 px).
+- Verified "suspicious" displayed images are real data, not decode bugs:
+  TMC-2026 has native periodic column striping (~3.5 px period, amplified on a
+  154 px wide overlap crop); OHRC-2026 reference mean 4.9/255 = genuinely dark
+  low-sun frame.
+- UI now renders an expandable evidence trace per result: source instrument,
+  reference instrument, native GSDs, common-grid GSD, preprocessing,
+  matcher/transformation, accuracy, verdict. (demo/app.py _render_pipeline_trace)
