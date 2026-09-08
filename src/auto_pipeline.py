@@ -30,6 +30,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import tempfile
 
 import cv2
@@ -101,6 +102,36 @@ def _rmse(H, pts1, pts2):
     r = np.linalg.norm(_apply_homography(H, np.asarray(pts1)) -
                        np.asarray(pts2), axis=1)
     return float(np.sqrt(np.mean(r ** 2))), r
+
+
+def _attach_decision(report, out_dir="", prefix="", join=lambda p: p,
+                     src=None, ref=None, H=None):
+    """Attach the definitive MATCH / NO MATCH decision + best product.
+
+    For a content ``registered`` pair with a homography we also write the best
+    aligned product: the source warped onto the reference frame (``_aligned``)
+    plus a Turbo difference map against the reference.
+    """
+    try:
+        if src is not None and ref is not None and H is not None:
+            h, w = ref.shape[:2]
+            warped = cv2.warpPerspective(src, H, (w, h))
+            aligned = os.path.join(out_dir, f"{prefix}_aligned.png")
+            if os.path.isdir(out_dir):
+                cv2.imwrite(join(aligned), warped)
+                diff = np.abs(warped.astype(np.float32)
+                              - ref.astype(np.float32))
+                d_path = os.path.join(out_dir, f"{prefix}_diff.png")
+                cv2.imwrite(join(d_path), np.clip(diff, 0, 255).astype(np.uint8))
+                report.setdefault("artifacts", {})["best_aligned"] = aligned
+                report["artifacts"]["diff"] = d_path
+    except Exception as exc:  # noqa: BLE001
+        report.setdefault("notes", []).append(
+            f"best-aligned product not written: {exc}")
+
+    from src.evaluation.decision import classify
+    report["decision"] = classify(report)
+    return report
 
 
 # --------------------------------------------------------------------------- #
@@ -191,7 +222,7 @@ def run_auto(ohrc_img, ohrc_geom, nac_img, *, out_dir="data/processed/auto",
                 report["notes"].append(
                     "could not read staged crops; ensure georeferencing wrote "
                     f"{prefix}_src.png / {prefix}_ref.png")
-                return report
+                return _attach_decision(report, out_dir=out_dir, prefix=prefix)
     except Exception as exc:  # noqa: BLE001
         # content-style staging failed for this pair (e.g. incompatible CSV
         # format, photometric/polar case). If a NAC geometry CSV is available we
@@ -206,7 +237,7 @@ def run_auto(ohrc_img, ohrc_geom, nac_img, *, out_dir="data/processed/auto",
             return _geometry_fallback(report, join, out_dir, prefix,
                                       ohrc_img, ohrc_geom, nac_img,
                                       nac_geom_csv, root)
-        return report
+        return _attach_decision(report, out_dir=out_dir, prefix=prefix)
 
     # ---- 2. detect + match + robust fit (champion config: SIFT + CLAHE) ----
     try:
@@ -259,10 +290,12 @@ def run_auto(ohrc_img, ohrc_geom, nac_img, *, out_dir="data/processed/auto",
             report["rmse_px"] = round(float(rmse_gt), 4)
         report["method"] = "content"
         report["verdict"] = "registered"
+        _attach_decision(report, out_dir=out_dir, prefix=prefix, join=join,
+                         src=src, ref=ref, H=Ht)
     except Exception as exc:  # noqa: BLE001
         report["verdict"] = "registration_failed"
         report["notes"].append(f"detection/matching/refinement failed: {exc}")
-        return report
+        return _attach_decision(report, out_dir=out_dir, prefix=prefix)
 
     # ---- 3. artifacts: overlay + match figure ----
     report["artifacts"] = _write_artifacts(report, src, ref, kp1, kp2, pts1,
@@ -301,10 +334,39 @@ def _geometry_fallback(report, join, out_dir, prefix, ohrc_img, ohrc_geom,
             "src": meta.get("src_png"), "ref": meta.get("ref_png"),
             "overlay": meta.get("overlay_png"),
         }
+        # attach honest content-evidence even on the geometry route: overlap NCC
+        # and per-crop contrast let the decision layer tell an illumination gap
+        # apart from a genuine geodetic frame disagreement (never leave a blank).
+        sp, rp = meta.get("src_png"), meta.get("ref_png")
+        if sp and rp and os.path.exists(join(sp)) and os.path.exists(join(rp)):
+            try:
+                from src.preprocessing.ch2_staging import (enhance_dark,
+                                                           low_contrast_score)
+                sA = cv2.imread(join(sp), cv2.IMREAD_GRAYSCALE)
+                rA = cv2.imread(join(rp), cv2.IMREAD_GRAYSCALE)
+                if sA is not None and rA is not None and sA.shape == rA.shape:
+                    se, re_ = enhance_dark(sA), enhance_dark(rA)
+                    union = (se > 0) & (re_ > 0)
+                    ncc = None
+                    if union.sum() > 100:
+                        ncc = float(np.corrcoef(
+                            se[union].astype(np.float64),
+                            re_[union].astype(np.float64))[0, 1])
+                    report["diagnostics"] = {
+                        "src_low_contrast": round(low_contrast_score(sA), 3),
+                        "ref_low_contrast": round(low_contrast_score(rA), 3),
+                        "src_mean": float(sA.mean()),
+                        "ref_mean": float(rA.mean()),
+                        "overlap_ncc": ncc,
+                        "overlap_px": int(union.sum()),
+                    }
+            except Exception as exc:  # noqa: BLE001
+                report.setdefault("notes", []).append(
+                    f"geometry-route evidence unavailable: {exc}")
     except Exception as exc:  # noqa: BLE001
         report["verdict"] = "registration_failed"
         report["notes"].append(f"geometry fallback also failed: {exc}")
-    return report
+    return _attach_decision(report, out_dir=out_dir, prefix=prefix)
 
 
 def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,
@@ -348,7 +410,51 @@ def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,
 # Phase 9 — multi-sensor dispatch (OHRC/TMC/IIRS) for PS 26166 coverage
 # --------------------------------------------------------------------------- #
 SUPPORTED_SENSOR_PAIRS = ("ohrc-nac", "tmc-ohrc", "iirs-ohrc",
-                          "tmc-nac", "iirs-nac")
+                          "tmc-nac", "iirs-nac", "ohrc-ohrc", "tmc-tmc",
+                          "iirs-iirs", "ohrc-tmc")
+
+
+def _sensor_of(path):
+    """Guess the sensor of a file from its name (ps26166 signals)."""
+    name = os.path.basename(str(path))
+    low = name.lower()
+    if re.search(r"m\d{10}(rc|lc|le|me)\.img$", low):
+        return "nac"
+    if "ch2_ohr" in low:
+        return "ohrc"
+    if "ch2_tmc" in low:
+        return "tmc"
+    if "ch2_iir" in low:
+        return "iirs"
+    if low.endswith(".img") or low.endswith(".tif") or low.endswith(".png") \
+            or low.endswith(".qub"):
+        for tok in ("ohr",):
+            if tok in low:
+                return "ohrc"
+    return "unknown"
+
+
+def detect_pair(src_img, ref_img):
+    """Auto-detect the (canonical) sensor pair for two arbitrary files."""
+    s, r = _sensor_of(src_img), _sensor_of(ref_img)
+    if s == "unknown" or r == "unknown":
+        raise ValueError(
+            f"cannot auto-detect sensor pair from "
+            f"{os.path.basename(str(src_img))!r} / "
+            f"{os.path.basename(str(ref_img))!r}; use --sensor explicitly")
+    pairs = {
+        ("ohrc", "nac"): "ohrc-nac", ("nac", "ohrc"): "ohrc-nac",
+        ("tmc", "ohrc"): "tmc-ohrc", ("ohrc", "tmc"): "ohrc-tmc",
+        ("iirs", "ohrc"): "iirs-ohrc", ("ohrc", "iirs"): "iirs-ohrc",
+        ("tmc", "nac"): "tmc-nac", ("nac", "tmc"): "tmc-nac",
+        ("iirs", "nac"): "iirs-nac", ("nac", "iirs"): "iirs-nac",
+        ("ohrc", "ohrc"): "ohrc-ohrc", ("tmc", "tmc"): "tmc-tmc",
+        ("iirs", "iirs"): "iirs-iirs",
+    }
+    pair = pairs.get((s, r))
+    if pair is None:
+        raise ValueError(f"no supported register for {s} <-> {r}")
+    return pair
 
 
 def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
@@ -378,37 +484,46 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
     os.makedirs(join(out_dir), exist_ok=True)
 
     if sensor_pair not in SUPPORTED_SENSOR_PAIRS:
-        return {"sensor_pair": sensor_pair, "verdict": "input_error",
-                "notes": [f"unsupported sensor pair {sensor_pair!r}; "
-                          f"expected one of {SUPPORTED_SENSOR_PAIRS}"]}
+        rep = {"sensor_pair": sensor_pair, "verdict": "input_error",
+               "notes": [f"unsupported sensor pair {sensor_pair!r}; "
+                         f"expected one of {SUPPORTED_SENSOR_PAIRS}"]}
+        return _attach_decision(rep, out_dir=join(out_dir), prefix=prefix)
 
     if sensor_pair == "ohrc-nac":
         report = run_auto(src_img, src_geom, ref_img, out_dir=out_dir,
                           prefix=prefix, nac_geom_csv=ref_geom, root=root,
                           verbose=verbose)
         report.setdefault("sensor_pair", sensor_pair)
+        _attach_decision(report, out_dir=join(out_dir), prefix=prefix)
         return report
 
     try:
-        if sensor_pair in ("tmc-ohrc", "tmc-nac"):
+        if sensor_pair in ("tmc-ohrc", "tmc-nac", "ohrc-tmc",
+                           "tmc-tmc", "ohrc-ohrc"):
             from src.preprocessing.ch2_staging import (
                 register_ch2_pair, register_ch2_to_nac)
-            if sensor_pair == "tmc-ohrc":
-                report = register_ch2_pair(
-                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
-                    out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
-                )
-            else:
+            if sensor_pair == "tmc-nac":
                 report = register_ch2_to_nac(
                     join(src_img), join(src_geom), join(ref_img), join(ref_geom),
                     out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
                 )
-        else:  # iirs-ohrc / iirs-nac
+            else:
+                report = register_ch2_pair(
+                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
+                )
+        else:  # iirs-ohrc / iirs-nac / iirs-iirs
             from src.detection.iirs import (
                 register_iirs_to_ohrc, register_iirs_to_nac)
             if sensor_pair == "iirs-nac":
                 report = register_iirs_to_nac(
                     join(src_img), join(src_geom), join(ref_img),
+                    out_dir=join(out_dir), prefix=prefix, bands=bands,
+                    n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
+                )
+            elif sensor_pair == "iirs-iirs":
+                report = register_iirs_to_ohrc(
+                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
                     out_dir=join(out_dir), prefix=prefix, bands=bands,
                     n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
                 )
@@ -422,6 +537,7 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
         report = {"sensor_pair": sensor_pair, "verdict": "registration_failed",
                   "notes": [f"{sensor_pair} registration failed: {exc}"]}
     report.setdefault("sensor_pair", sensor_pair)
+    _attach_decision(report, out_dir=join(out_dir), prefix=prefix)
     if verbose:
         print(f"[run_sensor_auto] {sensor_pair}: verdict={report.get('verdict')}"
               + (f", inliers={report.get('inliers')}" if report.get('inliers') is not None else ""))
@@ -444,6 +560,14 @@ def load_report(path, root=PROJECT_ROOT):
 
 def summarize(report):
     """Human-readable single-line summary of a report."""
+    d = report.get("decision") or {}
+    if d.get("matched"):
+        cause = d.get("cause", "")
+        return (f"MATCH ({cause}): {d.get('explanation')} — "
+                f"best product: {d.get('best_product')}")
+    if d.get("cause"):
+        return (f"{d.get('explanation')} — best product: "
+                f"{d.get('best_product')}")
     v = report.get("verdict")
     if v == "registered":
         return ("REGISTERED (content): RMSE={rmse_px} px, self-RMSE="

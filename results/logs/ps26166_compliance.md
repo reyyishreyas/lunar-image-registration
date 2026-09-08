@@ -18,7 +18,8 @@ Chandrayaan-2 optical images (OHRC, TMC and IIRS).*
 | **Corresponding match points** | `{prefix}_inliers.csv` (src_x,src_y,ref_x,ref_y) saved by `_save_correspondences` for content-registered pairs; `run_auto` wires `artifacts.correspondences` | `demo/app` renders path + count |
 | **Evaluation metric** | RMSE, inlier count, inlier ratio, n_matches, self-RMSE | metrics in app + `src/evaluation` |
 | **User-verifiable change visualisations** | red-frame + tag on every image surface (`src/visuals.py`), Turbo difference maps, red-boxed overlap swaths in all app modes | app-wide, all modes |
-| **Honest verdicts** | no fabricated models: `registered` (content match, sub-pixel RMSE), `geometry_registered` (SPICE + ISRO CSV common grid, content not verifiable), `not_registered` (content and geometry both fail) | all paths; TMC→NAC = geometry_registered; IIRS→NAC = not_registered |
+| **Honest verdicts** | no fabricated models: `registered` (content match, sub-pixel RMSE), `geometry_registered` (SPICE + ISRO CSV common grid, content not verifiable), `not_registered` (content and geometry both fail); `src/evaluation/decision.py` reduces any report to a definitive **MATCH / NO MATCH** with cause (`content_correspondence` / `dark_or_featureless` / `cross_sensor_mismatch` / `frame_disagreement`) + evidence + best product | all paths; shown real-data on OHRC→NAC (MATCH, RMSE vs GT 0.549 px), TMC→NAC (NO MATCH frame_disagreement, NCC −0.0032), OHRC-2026→NAC (frame_disagreement), IIRS→NAC (cross_sensor_mismatch) |
+| **Generic "drop any image"** | `scripts/run_auto.py --sensor any` auto-detects each file's sensor from its name (`ch2_ohr/tmc/iir*`, `M\d{10}*.IMG`) and dispatches; same-sensor combos ohrc-ohrc / tmc-tmc / iirs-iirs / ohrc-tmc wired | 4 distinct real pairs ran via `--sensor any`; decision + best aligned product produced on each |
 
 ## Honest limits (data / hardware, not code)
 

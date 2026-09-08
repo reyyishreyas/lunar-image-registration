@@ -90,6 +90,8 @@
 - `src/evaluation/sun_angle.py` (new)
 - `results/logs/ps26166_compliance.md` (updated)
 - `results/logs/phase9_summary.md` (this file)
+- **Phase 10 (next branch):** `results/logs/phase10_summary.md` — match/no-match
+  decision engine, `--sensor any` auto-detect, demonstrated on 4 real pairs.
 
 ## Phase 9b files
 - `src/preprocessing/ch2_staging.py` (+`GroundGridInverse`, honest overlap-NCC
