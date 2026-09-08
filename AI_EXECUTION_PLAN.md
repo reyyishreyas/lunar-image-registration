@@ -575,9 +575,14 @@ Restart phases (each gets its own branch off updated main, per AGENTS.md):
       grainy OHRC content; CLAHE stays the champion preconditioner. FINAL_CONFIG
       regression (native path): RMSE 22.6172 px, 235 inliers, ratio 0.8217 —
       unchanged. Details: `results/logs/phase1_restart_staging.md`.
-- [ ] Next step (not started): re-run the full pair-1 matching stages through a
-      single ground-resolved staging entry point (the crop PNG path already
-      stages at common GSD; remaining work is a shared `stage_pair()` API
-      consumed by detection/matching so no stage re-derives GSD) and re-verify
-      the FINAL_CONFIG regression. Pair 2 content matching stays
-      geometry-resolved per `results/logs/pair2_photometric_gap.md`.
+- [x] Shared ground-resolved staging entry point: `src/preprocessing/staging.py`
+      `stage_pair(pre, normalize, root)` georeferences (if not staged), loads
+      the common-GSD crops, applies preconditioning, and returns
+      {src, ref, gsd_m, norm_label, meta} — the single API every matching stage
+      consumes; no stage re-derives GSD or reads rasters. `crop_gsd_m` (computed
+      from the OHRC ground grid via `_crop_gsd_metres`) is recorded in
+      `georef_{prefix}.json`; `read_pair_meta` recovers it on cached runs.
+      `run_experiment` was refactored onto `stage_pair` (preprocessing-disabled
+      path kept at parity). Unit coverage in `tests/test_staging.py`.
+  RESULT: pass — full suite 24 tests; FINAL_CONFIG pair-1 regression after
+      refactor: RMSE 22.6172 px, 235 inliers, ratio 0.8217 — unchanged.

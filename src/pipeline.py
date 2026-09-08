@@ -24,74 +24,11 @@ def _abs(jpath):
     return os.path.join(PROJECT_ROOT, jpath)
 
 
-def load_pair(src_path, ref_path):
-    src = cv2.imread(_abs(src_path), cv2.IMREAD_GRAYSCALE)
-    ref = cv2.imread(_abs(ref_path), cv2.IMREAD_GRAYSCALE)
-    if src is None or ref is None:
-        raise FileNotFoundError(f"could not read pair inputs {src_path}, {ref_path}")
-    return src, ref
-
-
-def maybe_georeference(cfg):
-    pre = cfg.get("preprocessing", {})
-    if not pre.get("enabled", True):
-        return
-    out = pre["out_dir"]
-    src, ref = pre["outputs"]["src"], pre["outputs"]["ref"]
-    if os.path.exists(_abs(src)) and os.path.exists(_abs(ref)):
-        return
-    from src.preprocessing.georeference import georeference_pair
-
-    meta = georeference_pair(
-        ohrc_img_path=_abs(pre["ohrc_img"]),
-        ohrc_csv_path=_abs(pre["ohrc_geometry"]),
-        nac_img_path=_abs(pre["nac_img"]),
-        out_dir=_abs(out),
-        crop_px=pre.get("crop_px", 1024),
-        prefix=pre.get("prefix", "pair1"),
-        equal_gsd=bool(pre.get("equal_gsd", False)),
-        nac_geom_csv=pre.get("nac_geom_csv", ""),
-    )
-    return meta
-
-
 def apply_normalize(src, ref, ncfg):
-    """Apply the config's normalization stage to the pair before detection.
+    """Alias kept for external callers; real logic lives in staging."""
+    from src.preprocessing.staging import apply_precondition
 
-    Args:
-        src, ref: uint8 grayscale crops.
-        ncfg: config dict under top-level key "normalize" (empty if unset).
-
-    Returns:
-        (normalized_src, normalized_ref, label): label is a short string for the
-        ablation row's preproc column.
-    """
-    if not ncfg.get("enabled", False):
-        return src, ref, "raw"
-    method = ncfg.get("method", "")
-    if method == "histogram_match":
-        from src.preprocessing.normalize import histogram_match
-        return histogram_match(src, ref), ref, "histmatch"
-    if method == "clahe":
-        from src.preprocessing.normalize import apply_clahe
-        clip = float(ncfg.get("clip_limit", 2.0))
-        tile = int(ncfg.get("tile_grid", 8))
-        return (apply_clahe(src, clip_limit=clip, tile_grid=tile),
-                apply_clahe(ref, clip_limit=clip, tile_grid=tile),
-                f"clahe:{clip}")
-    if method == "edges":
-        from src.preprocessing.normalize import apply_edges
-        alpha = float(ncfg.get("alpha", 1.0))
-        return (apply_edges(src, alpha=alpha),
-                apply_edges(ref, alpha=alpha),
-                "edges")
-    if method == "gamma_shadow":
-        from src.preprocessing.shadow_correct import gamma_shadow_correct
-        gamma = float(ncfg.get("gamma", 0.5))
-        return (gamma_shadow_correct(src, gamma=gamma),
-                gamma_shadow_correct(ref, gamma=gamma),
-                f"gamma_shadow:{gamma}")
-    raise ValueError(f"unknown normalize method {method!r}")
+    return apply_precondition(src, ref, ncfg)
 
 
 def run_experiment(config_path, verbose=True):
@@ -100,13 +37,24 @@ def run_experiment(config_path, verbose=True):
     cfg["config_path"] = config_path
 
     t_start = time.time()
-    geo_meta = maybe_georeference(cfg)
+    from src.preprocessing.staging import stage_pair
+
+    pre = cfg.get("preprocessing", {})
+    norm = cfg.get("normalize", {})
+    if pre.get("enabled", True):
+        st = stage_pair(pre, norm, root=PROJECT_ROOT)
+        src, ref = st["src"], st["ref"]
+        norm_label = st["norm_label"]
+        gsd_m = st["gsd_m"]
+    else:
+        fmt = cfg["inputs"]
+        src = cv2.imread(_abs(fmt["src"]), cv2.IMREAD_GRAYSCALE)
+        ref = cv2.imread(_abs(fmt["ref"]), cv2.IMREAD_GRAYSCALE)
+        if src is None or ref is None:
+            raise FileNotFoundError(f"could not read pair inputs {fmt['src']}, {fmt['ref']}")
+        src, ref, norm_label = apply_normalize(src, ref, norm)
+        gsd_m = None
     t_geo = time.time() - t_start
-
-    fmt = cfg["inputs"]
-    src, ref = load_pair(fmt["src"], fmt["ref"])
-
-    src, ref, norm_label = apply_normalize(src, ref, cfg.get("normalize", {}))
 
     det_cfg = cfg["detector"]
     if det_cfg.get("name") == "sift":

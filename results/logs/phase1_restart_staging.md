@@ -54,6 +54,24 @@ preconditioning, FINAL_CONFIG regression.
   **RMSE 22.6172 px, 235 inliers, 0.8217** — matches the Phase 4 champion
   exactly (verified twice, see ablation.csv FINAL rows).
 
+## Shared staging entry point (stage_pair)
+
+- `src/preprocessing/staging.py`:
+  - `apply_precondition(src, ref, ncfg)` — photometric preconditioning
+    (`none | clahe | edges | histmatch | gamma_shadow`), moved from pipeline.
+  - `stage_pair(pre, normalize, root)` — single API consumed by all matching
+    stages: georeferences if crops absent, loads the common-GSD crops, applies
+    preconditioning, returns `{src, ref, gsd_m, norm_label, meta}`.
+  - `read_pair_meta(pre, root)` — recovers `georef_{prefix}.json` metadata on
+    cached runs.
+- `src/preprocessing/georeference.py::_crop_gsd_metres` — records `crop_gsd_m`
+  in the georeference JSON (OHRC native NAD83 grid GSD, ~0.99 m/px).
+- `src/pipeline.py::run_experiment` refactored onto `stage_pair`;
+  `apply_normalize` kept as an alias for external callers.
+- Regression after refactor: FINAL_CONFIG RMSE **22.6172 px**, 235 inliers,
+  0.8217 — unchanged (third verification).
+- Tests: `tests/test_staging.py` now 13; full suite **24 passed**.
+
 ## Tests
 - `tests/test_staging.py`: 8 new unit tests (ws_scale, refine bounds/lock,
   geometry-CSV seed + fallback, apply_edges gradient response).

@@ -476,6 +476,7 @@ def _set_georeference_pair(ohrc, ohrc_ws, nac, pix_axis, scan_axis, lon_grid,
 
     meta = {
         "ohrc_crop": {"pixel": p0, "scan": s0, "width": crop_px, "height": crop_px},
+        "crop_gsd_m": _crop_gsd_metres(pix_axis, scan_axis, lon_grid, lat_grid),
         "ohrc_ws_factor": OHRC_WS_FACTOR,
         "nac_ws_factor": fac,
         "nac_flip": t["flip"],
@@ -488,6 +489,14 @@ def _set_georeference_pair(ohrc, ohrc_ws, nac, pix_axis, scan_axis, lon_grid,
         "ref_png": ref_path,
     }
     return meta
+
+
+def _crop_gsd_metres(pix_axis, scan_axis, lon_grid, lat_grid):
+    """Common ground resolution of the staged crops (native OHRC 1:1 pixels)."""
+    from src.preprocessing.geometry import _gsd_from_geometry
+
+    m_scan, m_px = _gsd_from_geometry(scan_axis, pix_axis, lon_grid, lat_grid)
+    return round(0.5 * (m_scan + m_px), 2)
 
 
 def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
