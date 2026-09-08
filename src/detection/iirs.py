@@ -1,0 +1,213 @@
+"""Phase 9 — Chandrayaan-2 IIRS support (multi-spectral source, PS 26166).
+
+The Chandrayaan-2 **IIRS** (Imaging IR Spectrometer) is a hyperspectral imager.
+Its calibrated product is delivered in **ENVI** format (BSQ interleave):
+
+    ch2_iir_nri_*.qub   (binary raster)
+    ch2_iir_nri_*.hdr   (ENVI header: samples=250, lines=12620, bands=256,
+                         data type=2 i.e. int16, interleave=bsq)
+
+IIRS is radiometrically very different from the visible OHRC/TMC/NAC sensors, so
+it is the archetypal "multi-modal" case in PS 26166. This module provides:
+
+  * ``read_envi`` — bytes-bounded ENVI BSQ reader (samples/lines/bands from the
+    header) that never loads more than one band at a time (256 bands × 250 ×
+    12620 × 2 B would exceed RAM if read whole).
+  * ``read_iirs_raster`` — convenience wrapper for IIRS `.qub`+`.hdr`.
+  * ``choose_representative_band`` — pick a handful of well-contrasted bands to
+    carry into cross-modal matching (IIRS Band ~40/116 are useful vs visible).
+  * ``register_iirs_to_ohrc`` — stages a few representative IIRS bands, warps
+    them via ``cross_modal_register`` against an OHRC frame, and returns the
+    best candidate. It is intentionally proof-based: a `verdict: not_registered`
+    is returned (never a fabricated homography) if no band yields a reliable
+    model.
+"""
+
+from __future__ import annotations
+
+import os
+
+import cv2
+import numpy as np
+
+
+def parse_envi_header(hdr_path):
+    """Parse an ENVI header file into a dict of key -> value.
+
+    Handles the common ENVI header format (``key = value`` lines, values may
+    contain commas for arrays). Lower-cases keys for tolerant lookup.
+    """
+    meta = {}
+    with open(hdr_path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            meta[k.strip().lower()] = v.strip()
+    return meta
+
+
+def read_envi(raster_path, hdr_path=None, bands=None, memmap=False):
+    """Read an ENVI BSQ raster, band-selectively.
+
+    Args:
+        raster_path: path to the binary (.qub / .raw).
+        hdr_path: path to the .hdr; if None, derived from raster_path (.hdr).
+        bands: optional list of 0-based band indices to load (None = first band
+            only by default).
+        memmap: if True, return a memmap shaped (bands, lines, samples) so the
+            caller can sample without loading everything.
+
+    Returns a dict with keys ``data`` (uint8 or int16 array per requested bands),
+    plus the parsed header ``meta``.
+    """
+    hdr_path = hdr_path or (raster_path.rsplit(".", 1)[0] + ".hdr")
+    meta = parse_envi_header(hdr_path)
+    samples = int(meta.get("samples", "0"))
+    lines = int(meta.get("lines", "0"))
+    nbands = int(meta.get("bands", "0"))
+    dtype = int(meta.get("data type", "1"))
+    interleave = meta.get("interleave", "bsq").strip().lower()
+
+    dtype_map = {1: np.uint8, 2: np.int16, 3: np.int32, 4: np.float32,
+                 5: np.float64, 12: np.uint16, 13: np.uint32, 14: np.int64}
+    dt = dtype_map.get(dtype, np.uint8)
+    expected = samples * lines * nbands * np.dtype(dt).itemsize
+    size = os.path.getsize(raster_path)
+    if size < expected:
+        raise ValueError(
+            f"IIRS raster too small: got {size} B, expected ~{expected} B "
+            f"({samples}x{lines}x{nbands} {dt})")
+
+    if interleave != "bsq":
+        raise NotImplementedError(
+            f"only BSQ interleave supported, got {interleave!r}")
+
+    if bands is None:
+        bands = [0]
+    bands = [int(b) for b in bands]
+
+    if memmap:
+        mm = np.memmap(raster_path, dtype=dt, mode="r",
+                       shape=(nbands, lines, samples))
+        return {"data": mm[bands], "meta": meta, "bands": bands}
+
+    # BSQ: each band is a contiguous lines*samples block; read only the requested
+    # bands by seeking, so a 1.6 GB 256-band product costs ~band-block bytes.
+    band_bytes = lines * samples * np.dtype(dt).itemsize
+    out = np.empty((len(bands), lines, samples), dtype=dt)
+    with open(raster_path, "rb") as fh:
+        for out_i, b in enumerate(bands):
+            fh.seek(b * band_bytes)
+            raw = fh.read(band_bytes)
+            out[out_i] = np.frombuffer(raw, dtype=dt).reshape(lines, samples)
+    return {"data": out, "meta": meta, "bands": bands}
+
+
+def read_iirs_raster(qub_path, hdr_path=None, bands=None, memmap=False):
+    """Convenience: read_envi for IIRS .qub + .hdr."""
+    return read_envi(qub_path, hdr_path or (qub_path.rsplit(".", 1)[0] + ".hdr"),
+                     bands=bands, memmap=memmap)
+
+
+def choose_representative_bands(meta, n=4, contrast_kernel=(3, 3)):
+    """Choose well-contrasted IIRS bands to carry into cross-modal matching.
+
+    Returns a list of band indices (0-based). If the header lacks band info this
+    falls back to a fixed, physically-reasonable set (IR + NIR + SWIR).
+    """
+    nbands = int(meta.get("bands", "256"))
+    if nbands <= n:
+        return list(range(min(n, max(1, nbands))))
+    # physically useful IIRS band windows (approx): visible/blue ~1-40,
+    # NIR ~40-100, SWIR later. Sample a spread.
+    lo, hi = max(0, nbands // 8), max(1, nbands - 1)
+    step = max(1, (hi - lo) // n)
+    return [min(hi, lo + i * step) for i in range(n)]
+
+
+def as_u8(arr):
+    """Normalise an arbitrary 2-D band to uint8 (per-array min/max stretch)."""
+    a = np.asarray(arr, np.float32)
+    if a.size == 0:
+        return np.zeros_like(arr, np.uint8)
+    lo, hi = float(np.nanpercentile(a, 2)), float(np.nanpercentile(a, 98))
+    if hi <= lo:
+        return np.zeros(a.shape, np.uint8)
+    return np.clip((a - lo) / (hi - lo) * 255, 0, 255).astype(np.uint8)
+
+
+def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
+                          bands=None, n_bands=4, prefix="iirs_ohrc",
+                          min_inliers=12, min_ratio=0.02, **match_kw):
+    """Cross-modal registration of selected IIRS bands against an OHRC frame.
+
+    Workflow:
+      1. Read N representative IIRS bands (BSQ, band-selective).
+      2. Downsample the OHRC raw to a grayscale working crop (native uint8).
+      3. For each IIRS band, run ``cross_modal_register`` (geometry-dominant
+         front-ends) against the OHRC crop and keep the best candidate.
+      4. Record a per-band table + best model; return a JSON report. Never
+         fabricates a model.
+
+    Requires both full rasters; callers should pass bounded crops to keep the
+    IIRS and OHRC cost low (crop-first rule).
+    """
+    from src.detection.cross_modal import cross_modal_register
+    from src.preprocessing.tmc import read_ch2_raw, OHRC_WIDTH
+
+    os.makedirs(out_dir, exist_ok=True)
+    if bands is None:
+        meta0 = parse_envi_header(iirs_hdr)
+        bands = choose_representative_bands(meta0, n=n_bands)
+    r = read_envi(iirs_qub, iirs_hdr, bands=bands)
+    iirs_bands = r["data"]  # (len(bands), lines, samples)
+    meta = r["meta"]
+
+    # OHRC reference: read the whole strip as uint8 (2-D) via the CH2 reader
+    ohrc = read_ch2_raw(ohrc_img, ohrc_geom, width=OHRC_WIDTH)
+    # representational OHRC crop: middle scan band, full width, downsampled
+    rows, cols = ohrc.shape
+    mid = rows // 2
+    slice_rows = min(1024, rows)
+    ohrc_crop = ohrc[mid - slice_rows // 2: mid + slice_rows // 2, :]
+    ohrc_ws = cv2.resize(ohrc_crop, (256, 256), interpolation=cv2.INTER_AREA)
+
+    per_band = []
+    best = None
+    for i, b in enumerate(bands):
+        band_2d = iirs_bands[i] if iirs_bands.ndim == 3 else iirs_bands[0]
+        u = as_u8(band_2d)
+        # downsample IIRS band to 256 width (250 samples -> 256 canvas)
+        u_ws = cv2.resize(u, (256, 256), interpolation=cv2.INTER_AREA)
+        res = cross_modal_register(u_ws, ohrc_ws, min_inliers=min_inliers,
+                                   min_ratio=min_ratio, verbose=False, **match_kw)
+        rec = {"band": int(b), "ok": res is not None}
+        if res:
+            rec.update(inliers=res["inliers"], inlier_ratio=res["inlier_ratio"],
+                       front=res["front"], rmse=res.get("rmse"))
+            if best is None or res["inliers"] > best["inliers"]:
+                best = {**rec, "H": res["H"]}
+        else:
+            rec.update(inliers=0, inlier_ratio=0.0, front="n/a")
+        per_band.append(rec)
+
+    import json
+    report = {
+        "pair": "IIRS -> OHRC",
+        "verdict": "registered" if best else "not_registered",
+        "n_bands": len(bands),
+        "bands_used": [int(b) for b in bands],
+        "per_band": per_band,
+        "method": "cross_modal (geometry-dominant front-ends)",
+    }
+    if best:
+        report.update(best_inliers=best.get("inliers"),
+                      best_front=best.get("front"),
+                      best_band=best.get("band"),
+                      best_rmse=best.get("rmse"),
+                      H=best.get("H"))
+    with open(os.path.join(out_dir, f"{prefix}_report.json"), "w") as fh:
+        json.dump(report, fh, indent=2, default=str)
+    return report

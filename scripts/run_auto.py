@@ -15,6 +15,12 @@ Usage:
         --nac_geom     <NAC SPICE geometry CSV, for equal-GSD seed / geometry fallback>
         --ground_truth <csv of x1,y1,x2,y2 sub-pixel controls>
         --out_dir data/processed/auto --prefix auto
+
+    Phase 9 multi-sensor (PS 26166):
+        --sensor tmc-ohrc  --src_img <TMC .img> --src_geom <TMC geometry CSV> \
+            --ref_img <OHRC .img> --ref_geom <OHRC geometry CSV>
+        --sensor iirs-ohrc --src_img <IIRS .qub> --src_geom <IIRS .hdr> \
+            --ref_img <OHRC .img> --ref_geom <OHRC geometry CSV>
 """
 
 from __future__ import annotations
@@ -28,16 +34,21 @@ sys.path.insert(0, ROOT)
 
 
 def main():
-    from src.auto_pipeline import run_auto, write_json_report, summarize
+    from src.auto_pipeline import run_auto, run_sensor_auto, write_json_report, summarize
 
     ap = argparse.ArgumentParser(
-        description="fully-automatic OHRC<->NAC registration")
-    ap.add_argument("--ohrc_img", required=True, help="OHRC raw .img")
-    ap.add_argument("--ohrc_geom", required=True,
-                    help="OHRC ISRO geometry CSV (pixel,scan -> lon,lat)")
-    ap.add_argument("--nac_img", required=True, help="LRO NAC .IMG")
-    ap.add_argument("--nac_geom", default="",
-                    help="NAC SPICE geometry CSV (equal-GSD seed / geometry fallback)")
+        description="fully-automatic lunar registration (CLI)")
+    ap.add_argument("--sensor", default="ohrc-nac",
+                    choices=["ohrc-nac", "tmc-ohrc", "iirs-ohrc"],
+                    help="sensor pair to register (default ohrc-nac)")
+    ap.add_argument("--src_img", required=True,
+                    help="source: OHRC/TMC raw .img, or IIRS .qub")
+    ap.add_argument("--src_geom", required=True,
+                    help="source geometry: OHRC/TMC ISRO CSV, or IIRS .hdr")
+    ap.add_argument("--ref_img", required=True,
+                    help="reference: OHRC raw .img (or NAC .IMG for ohrc-nac)")
+    ap.add_argument("--ref_geom", default="",
+                    help="reference geometry: OHRC ISRO CSV (or NAC SPICE CSV)")
     ap.add_argument("--ground_truth", default="data/ground_truth/pair1_gt_v2.csv",
                     help="csv x1,y1,x2,y2 reference (only pair-1 has one)")
     ap.add_argument("--no-ground-truth", action="store_true",
@@ -50,13 +61,19 @@ def main():
                     help="stage both sensors to a common ground grid (SPICE seed)")
     args = ap.parse_args()
 
-    gt = "" if args.no_ground_truth else args.ground_truth
-    report = run_auto(
-        args.ohrc_img, args.ohrc_geom, args.nac_img,
-        out_dir=args.out_dir, prefix=args.prefix,
-        nac_geom_csv=args.nac_geom, ground_truth=gt,
-        normalize=args.normalize, equal_gsd=args.equal_gsd,
-    )
+    if args.sensor == "ohrc-nac":
+        gt = "" if args.no_ground_truth else args.ground_truth
+        report = run_auto(
+            args.src_img, args.src_geom, args.ref_img,
+            out_dir=args.out_dir, prefix=args.prefix,
+            nac_geom_csv=args.ref_geom, ground_truth=gt,
+            normalize=args.normalize, equal_gsd=args.equal_gsd,
+        )
+    else:
+        report = run_sensor_auto(
+            args.sensor, args.src_img, args.src_geom, args.ref_img, args.ref_geom,
+            out_dir=args.out_dir, prefix=args.prefix,
+        )
     print("\n" + summarize(report))
     json_path = write_json_report(report, os.path.join(args.out_dir, "report.json"))
     print(f"\nreport -> {json_path}")

@@ -332,6 +332,71 @@ def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,
 # --------------------------------------------------------------------------- #
 # report writer
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Phase 9 — multi-sensor dispatch (OHRC/TMC/IIRS) for PS 26166 coverage
+# --------------------------------------------------------------------------- #
+SUPPORTED_SENSOR_PAIRS = ("ohrc-nac", "tmc-ohrc", "iirs-ohrc")
+
+
+def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
+                    out_dir="data/processed/auto", prefix="sensor", root=PROJECT_ROOT,
+                    crop_rows=1024, swath_pix=None, bands=None, n_bands=4,
+                    min_inliers=12, min_ratio=0.02, verbose=True):
+    """Run automatic registration for any supported Chandrayaan-2 sensor pair.
+
+    This extends the Phase-8 auto entry point to the remaining PS 26166 sensors
+    (TMC and IIRS) without touching the working OHRC<->NAC path:
+
+      * ``ohrc-nac`` -> delegates to ``run_auto`` (Phase 8 champion path).
+      * ``tmc-ohrc`` -> ``register_tmc_to_ohrc`` (CH2 raw vs CH2 raw, width 4000).
+      * ``iirs-ohrc`` -> ``register_iirs_to_ohrc`` (IIRS ENVI hyperspectral band
+        selection + cross-modal matching vs OHRC).
+
+    Returns a single JSON report with an honest verdict; never raises for an
+    un-registerable pair. Content matching is proof-based: if no reliable model
+    is found the verdict is ``not_registered`` (TMC/IIRS get that from their own
+    registers), never a fabricated homography.
+    """
+    join = lambda p: p if os.path.isabs(p) else os.path.join(root, p)  # noqa: E731
+    os.makedirs(join(out_dir), exist_ok=True)
+
+    if sensor_pair not in SUPPORTED_SENSOR_PAIRS:
+        return {"sensor_pair": sensor_pair, "verdict": "input_error",
+                "notes": [f"unsupported sensor pair {sensor_pair!r}; "
+                          f"expected one of {SUPPORTED_SENSOR_PAIRS}"]}
+
+    if sensor_pair == "ohrc-nac":
+        report = run_auto(src_img, src_geom, ref_img, out_dir=out_dir,
+                          prefix=prefix, nac_geom_csv=ref_geom, root=root,
+                          verbose=verbose)
+        report.setdefault("sensor_pair", sensor_pair)
+        return report
+
+    try:
+        if sensor_pair == "tmc-ohrc":
+            from src.preprocessing.tmc import register_tmc_to_ohrc
+            report = register_tmc_to_ohrc(
+                join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                out_dir=join(out_dir), prefix=prefix, crop_rows=crop_rows,
+                swath_pix=swath_pix,
+            )
+        else:  # iirs-ohrc
+            from src.detection.iirs import register_iirs_to_ohrc
+            report = register_iirs_to_ohrc(
+                join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                out_dir=join(out_dir), prefix=prefix, bands=bands,
+                n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
+            )
+    except Exception as exc:  # noqa: BLE001
+        report = {"sensor_pair": sensor_pair, "verdict": "registration_failed",
+                  "notes": [f"{sensor_pair} registration failed: {exc}"]}
+    report.setdefault("sensor_pair", sensor_pair)
+    if verbose:
+        print(f"[run_sensor_auto] {sensor_pair}: verdict={report.get('verdict')}"
+              + (f", inliers={report.get('inliers')}" if report.get('inliers') is not None else ""))
+    return report
+
+
 def write_json_report(report, path, root=PROJECT_ROOT):
     p = path if os.path.isabs(path) else os.path.join(root, path)
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
