@@ -222,22 +222,37 @@ def _render_before_after(rep, src_name="Source", ref_name="Reference"):
 
     st.markdown("⬇  **After** — both re-projected on a common geographic grid"
                 + gsd_txt)
-    c, d = st.columns(2)
-    src, ref = arts.get("after_src"), arts.get("after_ref")
-    if not src:
-        src = arts.get("src")
-    if not ref:
-        ref = arts.get("ref")
-    ccap = f"**After · {src_name}** — {after_txt} (red outline)"
-    dcap = f"**After · {ref_name}** — {after_txt} (red outline)"
-    if src and os.path.exists(os.path.join(ROOT, src)):
-        c.image(os.path.join(ROOT, src), caption=ccap, width="stretch")
-    if ref and os.path.exists(os.path.join(ROOT, ref)):
-        d.image(os.path.join(ROOT, ref), caption=dcap, width="stretch")
-    st.caption("How to read this: the red box on each raw strip is the exact "
-               "overlap swath the pipeline extracted; the red-outlined panels "
-               "are that same data re-projected onto one shared geographic grid "
-               "at equal ground-sample distance.")
+    montage = arts.get("montage")
+    if montage and os.path.exists(os.path.join(ROOT, montage)):
+        st.image(os.path.join(ROOT, montage), width="stretch",
+                 caption=f"Montage — After · {src_name}  |  After · {ref_name} "
+                         f"|  Difference (warm = pixels that changed most, "
+                         f"dark = already agreeing). {after_txt}.")  # noqa: E501
+    else:
+        c, d = st.columns(2)
+        src, ref = arts.get("after_src"), arts.get("after_ref")
+        if not src:
+            src = arts.get("src")
+        if not ref:
+            ref = arts.get("ref")
+        ccap = f"**After · {src_name}** — {after_txt} (red outline)"
+        dcap = f"**After · {ref_name}** — {after_txt} (red outline)"
+        if src and os.path.exists(os.path.join(ROOT, src)):
+            c.image(os.path.join(ROOT, src), caption=ccap, width="stretch")
+        if ref and os.path.exists(os.path.join(ROOT, ref)):
+            d.image(os.path.join(ROOT, ref), caption=dcap, width="stretch")
+        cmap = arts.get("change_map")
+        if cmap and os.path.exists(os.path.join(ROOT, cmap)):
+            st.markdown("**What changed, pixel by pixel**")
+            st.image(os.path.join(ROOT, cmap), width="stretch",
+                     caption="Bright/warm (yellow–red) = large difference "
+                             "between the two products at that pixel after "
+                             "registration; dark/blue = already agreeing.")
+    st.caption("How to read this: the red box + 'OVERLAP SWATH' label on each "
+               "Before panel is the exact overlap swath the pipeline extracted; "
+               "the red-outlined 'REGISTERED' panels are that same data "
+               "re-projected onto one shared geographic grid at equal "
+               "ground-sample distance (GSD).")
 
 
 def _render_sensor(res):

@@ -130,6 +130,10 @@ def test_register_ch2_pair_geometry_fallback_dark(tmp_path):
     if rep["verdict"] == "geometry_registered":
         assert rep["method"] == "geometry"
         assert "NOT verifiable" in rep["notes"][-1]
+    for k in ("original_src", "original_ref", "after_src", "after_ref",
+              "change_map", "montage"):
+        assert k in rep["artifacts"] and rep["artifacts"][k], k
+    assert os.path.isfile(rep["artifacts"]["montage"])
 
 
 def test_original_preview_box_and_highlights(tmp_path):
@@ -141,6 +145,7 @@ def test_original_preview_box_and_highlights(tmp_path):
     assert prev is not None and box is not None
     h, w = prev.shape
     assert h <= 1600 and w <= 640
+    assert h / w <= 3.5, "preview must stay a wide panel, not a tall sliver"
     x0, y0, x1, y1 = box
     assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
 

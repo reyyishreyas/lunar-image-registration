@@ -110,9 +110,12 @@ def _inverse_maps(pix_axis, scan_axis, lon_grid, lat_grid):
 RECT_COLOR = (0, 0, 255)  # BGR red
 
 
-def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600):
-    """Build a display-ready 'before' strip: a context window around the native
-    overlap region the geometry maps onto, bin-downsampled to ``max_w``/``max_h``.
+def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600,
+                           max_aspect=3.5):
+    """Build a display-ready 'before' crop: a context window around the native
+    overlap region the geometry maps onto, bin-downsampled so it fits a wide
+    panel (aspect <= ``max_aspect`` — strips are otherwise 10:1+ slivers that
+    render off-screen in the UI).
 
     Returns ``(preview_gray_uint8, box)`` where ``box = (x0, y0, x1, y1)`` is the
     inner overlap window in preview-pixel coordinates (so callers can draw a
@@ -132,22 +135,25 @@ def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600):
     c0 = max(0, s0 - int(span_s * 0.4)); c1 = min(rows, s1 + int(span_s * 0.4))
     d0 = max(0, p0 - int(span_p * 0.4)); d1 = min(cols, p1 + int(span_p * 0.4))
     crop = np.ascontiguousarray(ll[c0:c1, d0:d1]).astype(np.float32)
-    fac = 1
-    if crop.shape[1] > max_w or crop.shape[0] > max_h:
-        fac = max(int(np.ceil(crop.shape[1] / max_w)),
-                  int(np.ceil(crop.shape[0] / max_h)), 1)
-        h2, w2 = crop.shape[0] // fac, crop.shape[1] // fac * fac
-        crop = crop[:h2 * fac, :w2].reshape(h2, fac, w2 // fac, fac).mean(axis=(1, 3))
+    fac_s, fac_p = 1, 1
+    if crop.shape[1] > max_w:
+        fac_p = max(int(np.ceil(crop.shape[1] / max_w)), 1)
+    if crop.shape[0] > max_h:
+        fac_s = max(int(np.ceil(crop.shape[0] / max_h)), 1)
+    while (crop.shape[0] / fac_s) / max(crop.shape[1] / fac_p, 1) > max_aspect:
+        fac_s += 1
+    hs, ws = crop.shape[0] // fac_s, crop.shape[1] // fac_p
+    crop = crop[:hs * fac_s, :ws * fac_p].reshape(hs, fac_s, ws, fac_p).mean(axis=(1, 3))
     prev = (percentile_stretch(crop) if crop.max() > crop.min()
             else np.zeros_like(crop)).astype(np.uint8)
-    box = (int((p0 - d0) / fac), int((s0 - c0) / fac),
-           int((p1 - d0) / fac), int((s1 - c0) / fac))
+    box = (int((p0 - d0) / fac_p), int((s0 - c0) / fac_s),
+           int((p1 - d0) / fac_p), int((s1 - c0) / fac_s))
     return prev, box
 
 
 def _draw_highlight_box(gray, box):
-    """Red rectangle around the extracted overlap window; context outside the
-    box is dimmed so the change is obvious even after UI downscaling."""
+    """Red rectangle + 'OVERLAP SWATH' label around the extracted window; the
+    context outside the box is dimmed hard so the change cannot be missed."""
     bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     if box:
         x0, y0, x1, y1 = box
@@ -155,22 +161,44 @@ def _draw_highlight_box(gray, box):
         inside = np.zeros((h, w), bool)
         inside[max(0, y0):min(h, y1 + 1), max(0, x0):min(w, x1 + 1)] = True
         dimmed = bgr[~inside]
-        bgr[~inside] = (dimmed * 0.45).astype(np.uint8)
-        t = max(4, int(min(h, w) / 60))
+        bgr[~inside] = (dimmed * 0.35).astype(np.uint8)
+        t = max(4, int(min(h, w) / 30))
         cv2.rectangle(bgr, (x0, y0), (x1, y1), RECT_COLOR, t)
+        text = "OVERLAP SWATH"
+        fs = max(0.7, min(h, w) / 420)
+        th = max(2, int(fs * 3.2))
+        (tw, thb), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+        tx = max(2, min(x0, max(2, w - tw - 8)))
+        ty = max(thb + 6, y0 - thb - 10)
+        cv2.rectangle(bgr, (tx - 8, ty - thb - 8), (tx + tw + 8, ty + 6),
+                      (0, 0, 0), -1)
+        cv2.putText(bgr, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, fs,
+                    (255, 255, 255), th, cv2.LINE_AA)
+        cv2.putText(bgr, text, (tx + max(1, th // 6), ty), cv2.FONT_HERSHEY_SIMPLEX,
+                    fs, RECT_COLOR, max(1, th // 5), cv2.LINE_AA)
     return bgr
 
 
-def _outline_registered(gray):
-    """Thick red outline plus a faint inner glow around a registered product."""
+def _outline_registered(gray, tag="REGISTERED"):
+    """Red outline + 'REGISTERED' tag around a registered product."""
     bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     h, w = bgr.shape[:2]
-    t = max(4, int(min(h, w) / 60))
+    t = max(4, int(min(h, w) / 30))
     cv2.rectangle(bgr, (0, 0), (w - 1, h - 1), RECT_COLOR, t)
     glow_t = max(1, t // 3)
     cv2.rectangle(bgr, (t + glow_t, t + glow_t),
-                  (w - 1 - t - glow_t, h - 1 - t - glow_t),
-                  RECT_COLOR, glow_t)
+                  (w - 1 - t - glow_t, h - 1 - t - glow_t), RECT_COLOR, glow_t)
+    fs = max(0.7, min(h, w) / 420)
+    th = max(2, int(fs * 3.2))
+    (tw, thb), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+    pad = max(6, t // 2)
+    cv2.rectangle(bgr, (pad - 2, pad - 2),
+                  (pad + tw + 10, pad + thb + 6), (0, 0, 0), -1)
+    cv2.putText(bgr, tag, (pad + 8, pad + thb + 2), cv2.FONT_HERSHEY_SIMPLEX, fs,
+                (255, 255, 255), th, cv2.LINE_AA)
+    cv2.putText(bgr, tag, (pad + 8 + max(1, th // 6), pad + thb + 2),
+                cv2.FONT_HERSHEY_SIMPLEX, fs, RECT_COLOR, max(1, th // 5),
+                cv2.LINE_AA)
     return bgr
 
 
@@ -264,6 +292,16 @@ def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
         result["original_ref"] = before_ref if prev_ref is not None else None
         result["after_src"] = after_src
         result["after_ref"] = after_ref
+        diff = np.abs(src_g.astype(np.int16) - ref_g.astype(np.int16)).astype(np.uint8)
+        diff = percentile_stretch(diff) if diff.max() > diff.min() else diff
+        result["change_map"] = os.path.join(out_dir, f"{prefix}_change.png")
+        cv2.imwrite(result["change_map"], cv2.applyColorMap(diff, cv2.COLORMAP_TURBO))
+        result["montage"] = os.path.join(out_dir, f"{prefix}_montage.png")
+        cv2.imwrite(result["montage"], np.hstack([
+            cv2.imread(result["after_src"]),
+            cv2.imread(result["after_ref"]),
+            cv2.imread(result["change_map"]),
+        ]))
         with open(os.path.join(out_dir, f"{prefix}_stage.json"), "w") as fh:
             json.dump({k: v for k, v in result.items()
                        if not isinstance(v, np.ndarray)}, fh, indent=2)
@@ -343,6 +381,10 @@ def register_ch2_pair(src_img, src_geom, ref_img, ref_geom, *, out_dir,
         report["artifacts"]["after_src"] = st["after_src"]
     if st.get("after_ref"):
         report["artifacts"]["after_ref"] = st["after_ref"]
+    if st.get("change_map"):
+        report["artifacts"]["change_map"] = st["change_map"]
+    if st.get("montage"):
+        report["artifacts"]["montage"] = st["montage"]
     report["notes"].append(st["note"])
 
     # --- 2. content attempt on enhanced pair ---

@@ -227,8 +227,18 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     after_ref = os.path.join(out_dir, f"{prefix}_after_ref.png")
     cv2.imwrite(proc_src, enhance_dark(u_ws))
     cv2.imwrite(proc_ref, ohrc_ref)
-    cv2.imwrite(after_src, _outline_registered(enhance_dark(u_ws)))
-    cv2.imwrite(after_ref, _outline_registered(ohrc_ref))
+    after_src_p = os.path.join(out_dir, f"{prefix}_after_src.png")
+    after_ref_p = os.path.join(out_dir, f"{prefix}_after_ref.png")
+    cv2.imwrite(after_src_p, _outline_registered(enhance_dark(u_ws)))
+    cv2.imwrite(after_ref_p, _outline_registered(ohrc_ref))
+    diff = np.abs(enhance_dark(u_ws).astype(np.int16)
+                  - ohrc_ref.astype(np.int16)).astype(np.uint8)
+    diff = percentile_stretch(diff) if diff.max() > diff.min() else diff
+    change_p = os.path.join(out_dir, f"{prefix}_change.png")
+    cv2.imwrite(change_p, cv2.applyColorMap(diff, cv2.COLORMAP_TURBO))
+    montage = os.path.join(out_dir, f"{prefix}_montage.png")
+    cv2.imwrite(montage, np.hstack([cv2.imread(after_src_p),
+                                    cv2.imread(after_ref_p), cv2.imread(change_p)]))
 
     report = {
         "pair": "IIRS -> OHRC",
@@ -242,8 +252,10 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         "artifacts": {
             "original_src": prev_src,
             "original_ref": prev_ref,
-            "after_src": after_src,
-            "after_ref": after_ref,
+            "after_src": after_src_p,
+            "after_ref": after_ref_p,
+            "change_map": change_p,
+            "montage": montage,
             "src": proc_src,
             "ref": proc_ref,
         },

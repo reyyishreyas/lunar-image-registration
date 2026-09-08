@@ -125,3 +125,20 @@ re-projections). Added explicit red highlight markers:
   the common grid".
 - New test test_original_preview_box_and_highlights; suite 65 passed; AppTest
   renders the legend.
+
+## Visible, labeled before/after (v3 — "red boxes STILL not visible" fix)
+
+Root causes found and fixed:
+- Panels were >10:1 tall slivers; on screen the frame was far off-screen / an
+  invisible sliver. _make_original_preview now decimates along-track MORE than
+  across-track (per-axis integer binning; uniform binning preserves aspect) so
+  every preview is a <=3.5:1 wide panel.
+- Labels: every Before panel now carries a red 'OVERLAP SWATH' box + text and a
+  hard-dimmed context; After panels carry a red 'REGISTERED' outline + tag.
+- New 'what changed' proof: a per-pixel |src-ref| difference map (TURBO
+  colormap) written as change_map, and the After pair + difference are stacked
+  into one wide 2.2:1 montage so nothing renders as a sliver.
+- Verified: TMC/OHRC-2026 real run -> before panel aspect 2.7/2.5 (was 16/7.8),
+  ~45-46k red marker pixels per Before, montage 1024x462 with 75k red px; suite
+  65 passed; AppTest renders montage branch (else-branch marker absent) with no
+  exceptions. register test now asserts all six evidence artifacts exist.
