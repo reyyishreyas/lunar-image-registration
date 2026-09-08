@@ -21,6 +21,10 @@ Usage:
             --ref_img <OHRC .img> --ref_geom <OHRC geometry CSV>
         --sensor iirs-ohrc --src_img <IIRS .qub> --src_geom <IIRS .hdr> \
             --ref_img <OHRC .img> --ref_geom <OHRC geometry CSV>
+        --sensor tmc-nac   --src_img <TMC .img> --src_geom <TMC geometry CSV> \
+            --ref_img <LRO NAC .IMG> --ref_geom <NAC SPICE CSV>
+        --sensor iirs-nac  --src_img <IIRS .qub> --src_geom <IIRS .hdr> \
+            --ref_img <LRO NAC .IMG>
 """
 
 from __future__ import annotations
@@ -39,16 +43,17 @@ def main():
     ap = argparse.ArgumentParser(
         description="fully-automatic lunar registration (CLI)")
     ap.add_argument("--sensor", default="ohrc-nac",
-                    choices=["ohrc-nac", "tmc-ohrc", "iirs-ohrc"],
+                    choices=["ohrc-nac", "tmc-ohrc", "iirs-ohrc",
+                             "tmc-nac", "iirs-nac"],
                     help="sensor pair to register (default ohrc-nac)")
     ap.add_argument("--src_img", required=True,
                     help="source: OHRC/TMC raw .img, or IIRS .qub")
     ap.add_argument("--src_geom", required=True,
                     help="source geometry: OHRC/TMC ISRO CSV, or IIRS .hdr")
     ap.add_argument("--ref_img", required=True,
-                    help="reference: OHRC raw .img (or NAC .IMG for ohrc-nac)")
+                    help="reference: OHRC raw .img, LRO NAC .IMG, or IIRS .qub")
     ap.add_argument("--ref_geom", default="",
-                    help="reference geometry: OHRC ISRO CSV (or NAC SPICE CSV)")
+                    help="reference geometry: OHRC ISRO CSV, or NAC SPICE CSV")
     ap.add_argument("--ground_truth", default="data/ground_truth/pair1_gt_v2.csv",
                     help="csv x1,y1,x2,y2 reference (only pair-1 has one)")
     ap.add_argument("--no-ground-truth", action="store_true",

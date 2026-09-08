@@ -347,7 +347,8 @@ def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,
 # --------------------------------------------------------------------------- #
 # Phase 9 — multi-sensor dispatch (OHRC/TMC/IIRS) for PS 26166 coverage
 # --------------------------------------------------------------------------- #
-SUPPORTED_SENSOR_PAIRS = ("ohrc-nac", "tmc-ohrc", "iirs-ohrc")
+SUPPORTED_SENSOR_PAIRS = ("ohrc-nac", "tmc-ohrc", "iirs-ohrc",
+                          "tmc-nac", "iirs-nac")
 
 
 def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
@@ -360,9 +361,13 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
     (TMC and IIRS) without touching the working OHRC<->NAC path:
 
       * ``ohrc-nac`` -> delegates to ``run_auto`` (Phase 8 champion path).
-      * ``tmc-ohrc`` -> ``register_tmc_to_ohrc`` (CH2 raw vs CH2 raw, width 4000).
+      * ``tmc-ohrc`` -> ``register_ch2_pair`` (CH2 vs CH2, content -> geometry).
       * ``iirs-ohrc`` -> ``register_iirs_to_ohrc`` (IIRS ENVI hyperspectral band
         selection + cross-modal matching vs OHRC).
+      * ``tmc-nac``  -> ``register_ch2_to_nac`` (TMC source vs **LRO NAC lunar
+        reference** via ISRO CSV + NAC SPICE ground grid).
+      * ``iirs-nac`` -> ``register_iirs_to_nac`` (IIRS vs **LRO NAC** content
+        attempt only — IIRS has no geometry CSV).
 
     Returns a single JSON report with an honest verdict; never raises for an
     un-registerable pair. Content matching is proof-based: if no reliable model
@@ -385,19 +390,34 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
         return report
 
     try:
-        if sensor_pair == "tmc-ohrc":
-            from src.preprocessing.ch2_staging import register_ch2_pair
-            report = register_ch2_pair(
-                join(src_img), join(src_geom), join(ref_img), join(ref_geom),
-                out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
-            )
-        else:  # iirs-ohrc
-            from src.detection.iirs import register_iirs_to_ohrc
-            report = register_iirs_to_ohrc(
-                join(src_img), join(src_geom), join(ref_img), join(ref_geom),
-                out_dir=join(out_dir), prefix=prefix, bands=bands,
-                n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
-            )
+        if sensor_pair in ("tmc-ohrc", "tmc-nac"):
+            from src.preprocessing.ch2_staging import (
+                register_ch2_pair, register_ch2_to_nac)
+            if sensor_pair == "tmc-ohrc":
+                report = register_ch2_pair(
+                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
+                )
+            else:
+                report = register_ch2_to_nac(
+                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
+                )
+        else:  # iirs-ohrc / iirs-nac
+            from src.detection.iirs import (
+                register_iirs_to_ohrc, register_iirs_to_nac)
+            if sensor_pair == "iirs-nac":
+                report = register_iirs_to_nac(
+                    join(src_img), join(src_geom), join(ref_img),
+                    out_dir=join(out_dir), prefix=prefix, bands=bands,
+                    n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
+                )
+            else:
+                report = register_iirs_to_ohrc(
+                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    out_dir=join(out_dir), prefix=prefix, bands=bands,
+                    n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
+                )
     except Exception as exc:  # noqa: BLE001
         report = {"sensor_pair": sensor_pair, "verdict": "registration_failed",
                   "notes": [f"{sensor_pair} registration failed: {exc}"]}

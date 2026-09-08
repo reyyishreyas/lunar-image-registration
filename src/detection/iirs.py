@@ -154,9 +154,7 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     Requires both full rasters; callers should pass bounded crops to keep the
     IIRS and OHRC cost low (crop-first rule).
     """
-    from src.detection.cross_modal import cross_modal_register
     from src.preprocessing.tmc import read_ch2_raw, OHRC_WIDTH
-
     os.makedirs(out_dir, exist_ok=True)
     if bands is None:
         meta0 = parse_envi_header(iirs_hdr)
@@ -165,11 +163,6 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     iirs_bands = r["data"]  # (len(bands), lines, samples)
     meta = r["meta"]
 
-    # OHRC reference: read the whole strip as uint8 (2-D) via the CH2 reader,
-    # then lift contrast (IIRS IR vs visible OHRC differ radiometrically and the
-    # OHRC may be a dark/polar hard case).
-    from src.preprocessing.ch2_staging import (enhance_dark, low_contrast_score,
-                                                percentile_stretch, _outline_registered)
     ohrc = read_ch2_raw(ohrc_img, ohrc_geom, width=OHRC_WIDTH)
     rows, cols = ohrc.shape
     mid = rows // 2
@@ -177,6 +170,63 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     ohrc_crop = ohrc[mid - slice_rows // 2: mid + slice_rows // 2, :]
     ohrc_ws = cv2.resize(ohrc_crop, (256, 256), interpolation=cv2.INTER_AREA)
     ohrc_ref = enhance_dark(ohrc_ws)
+    native_ref = {"rows": int(rows), "cols": int(cols)}
+
+    return _register_iirs_vs_reference(
+        iirs_bands, bands, ohrc_ref, meta, out_dir, prefix,
+        pair="IIRS -> OHRC", reference="OHRC",
+        min_inliers=min_inliers, min_ratio=min_ratio, match_kw=match_kw,
+        native_ref=native_ref, ref_before=ohrc_crop, ref_before_lab="OHRC strip",
+    )
+
+
+def register_iirs_to_nac(iirs_qub, iirs_hdr, nac_img, out_dir, bands=None,
+                         n_bands=4, prefix="iirs_nac", min_inliers=12,
+                         min_ratio=0.02, **match_kw):
+    """Content-only registration of IIRS bands against an **LRO NAC** reference.
+
+    IIRS products carry no ISRO geometry CSV / ENVI map-info, so a ground-grid
+    (geometry) registration is impossible for IIRS — this is a content attempt
+    only, and the verdict is an honest ``not_registered`` when no band yields a
+    reliable model (never a fabricated homography). The NAC is read as a
+    grayscale working crop via the shared rasters reader.
+    """
+    from src.preprocessing.georeference import read_nac_img
+    from src.preprocessing.geometry import as_u8
+    from src.preprocessing.ch2_staging import enhance_dark
+    os.makedirs(out_dir, exist_ok=True)
+    if bands is None:
+        meta0 = parse_envi_header(iirs_hdr)
+        bands = choose_representative_bands(meta0, n=n_bands)
+    r = read_envi(iirs_qub, iirs_hdr, bands=bands)
+    iirs_bands = r["data"]
+    meta = r["meta"]
+
+    nac = read_nac_img(nac_img)
+    rows, cols = nac.shape
+    mid = rows // 2
+    slice_rows = min(1024, rows)
+    nac_crop = nac[mid - slice_rows // 2: mid + slice_rows // 2, :]
+    nac_ws = cv2.resize(as_u8(nac_crop), (256, 256),
+                        interpolation=cv2.INTER_AREA)
+    nac_ref = enhance_dark(nac_ws)
+    native_ref = {"rows": int(rows), "cols": int(cols)}
+
+    return _register_iirs_vs_reference(
+        iirs_bands, bands, nac_ref, meta, out_dir, prefix,
+        pair="IIRS -> LRO NAC", reference="LRO NAC",
+        min_inliers=min_inliers, min_ratio=min_ratio, match_kw=match_kw,
+        native_ref=native_ref, ref_before=nac_crop, ref_before_lab="NAC working crop",
+    )
+
+
+def _register_iirs_vs_reference(iirs_bands, bands, ref_ws, meta, out_dir, prefix,
+                                *, pair, reference, min_inliers, min_ratio,
+                                match_kw, native_ref, ref_before, ref_before_lab):
+    """Shared IIRS content-vs-(grayscale reference crop) register body."""
+    from src.detection.cross_modal import cross_modal_register
+    from src.preprocessing.ch2_staging import (enhance_dark, low_contrast_score,
+                                                percentile_stretch, _outline_registered)
 
     per_band = []
     best = None
@@ -185,7 +235,7 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         u = as_u8(band_2d)
         u_ws = cv2.resize(u, (256, 256), interpolation=cv2.INTER_AREA)
         u_ref = enhance_dark(u_ws)
-        res = cross_modal_register(u_ref, ohrc_ref, min_inliers=min_inliers,
+        res = cross_modal_register(u_ref, ref_ws, min_inliers=min_inliers,
                                    min_ratio=min_ratio, verbose=False, **match_kw)
         rec = {"band": int(b), "ok": res is not None,
                "low_contrast": round(low_contrast_score(u_ws), 3)}
@@ -193,7 +243,8 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
             rec.update(inliers=res["inliers"], inlier_ratio=res["inlier_ratio"],
                        front=res["front"], rmse=res.get("rmse"))
             if best is None or res["inliers"] > best["inliers"]:
-                best = {**rec, "H": res["H"]}
+                best = {**rec, "H": res["H"], "pts1": res.get("pts1"),
+                        "pts2": res.get("pts2"), "inl": res.get("inl")}
         else:
             rec.update(inliers=0, inlier_ratio=0.0, front="n/a")
         per_band.append(rec)
@@ -216,43 +267,52 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         bl = [int(x) for x in bands]
         if bi in bl:
             orig_iirs = iirs_bands[bl.index(bi)]
-    ohrc_crop_before = ohrc[mid - slice_rows // 2: mid + slice_rows // 2, :]
     prev_src = os.path.join(out_dir, f"{prefix}_original_src.png")
     prev_ref = os.path.join(out_dir, f"{prefix}_original_ref.png")
     cv2.imwrite(prev_src, _bin_preview(np.asarray(orig_iirs)))
-    cv2.imwrite(prev_ref, _bin_preview(ohrc_crop_before))
+    cv2.imwrite(prev_ref, _bin_preview(ref_before))
     proc_src = os.path.join(out_dir, f"{prefix}_src.png")
     proc_ref = os.path.join(out_dir, f"{prefix}_ref.png")
-    after_src = os.path.join(out_dir, f"{prefix}_after_src.png")
-    after_ref = os.path.join(out_dir, f"{prefix}_after_ref.png")
     cv2.imwrite(proc_src, enhance_dark(u_ws))
-    cv2.imwrite(proc_ref, ohrc_ref)
+    cv2.imwrite(proc_ref, ref_ws)
     after_src_p = os.path.join(out_dir, f"{prefix}_after_src.png")
     after_ref_p = os.path.join(out_dir, f"{prefix}_after_ref.png")
     cv2.imwrite(after_src_p, _outline_registered(enhance_dark(u_ws)))
-    cv2.imwrite(after_ref_p, _outline_registered(ohrc_ref))
+    cv2.imwrite(after_ref_p, _outline_registered(ref_ws))
     diff = np.abs(enhance_dark(u_ws).astype(np.int16)
-                  - ohrc_ref.astype(np.int16)).astype(np.uint8)
+                  - ref_ws.astype(np.int16)).astype(np.uint8)
     diff = percentile_stretch(diff) if diff.max() > diff.min() else diff
     change_p = os.path.join(out_dir, f"{prefix}_change.png")
     cv2.imwrite(change_p, cv2.applyColorMap(diff, cv2.COLORMAP_TURBO))
     montage = os.path.join(out_dir, f"{prefix}_montage.png")
     cv2.imwrite(montage, np.hstack([cv2.imread(after_src_p),
                                     cv2.imread(after_ref_p), cv2.imread(change_p)]))
+    import src.preprocessing.ch2_staging as _cs
+    _save_iirs_correspondences = _cs._save_correspondences
+    saved_csv = None
+    if best is not None:
+        report_proxy = {"artifacts": {}, "notes": []}
+        _save_iirs_correspondences(
+            report_proxy,
+            {"pts1": best.get("pts1"), "pts2": best.get("pts2"),
+             "inl": best.get("inl")},
+            out_dir, prefix)
+        saved_csv = report_proxy["artifacts"].get("correspondences")
 
     report = {
-        "pair": "IIRS -> OHRC",
+        "pair": pair,
+        "reference": reference,
         "verdict": "registered" if best else "not_registered",
         "n_bands": len(bands),
         "bands_used": [int(b) for b in bands],
         "per_band": per_band,
         "method": "cross_modal (geometry-dominant front-ends)",
-        "ref_low_contrast": round(low_contrast_score(ohrc_ws), 3),
+        "ref_low_contrast": round(low_contrast_score(ref_ws), 3),
         "geometry_available": False,
         "dimensions": {
             "native_src": {"rows": int(iirs_bands.shape[1]),
                            "cols": int(iirs_bands.shape[2])},
-            "native_ref": {"rows": int(rows), "cols": int(cols)},
+            "native_ref": native_ref,
             "workspace": {"rows": 256, "cols": 256},
             "gsd_m": None,
         },
@@ -270,11 +330,15 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
             "IIRS products carry no ISRO geometry CSV / ENVI map-info: ground-grid "
             "(geometry) registration is not possible for IIRS. Registration is "
             "content-based only; if content matching fails on a dark/polar/IR-vs-"
-            "visible pair the verdict is an honest not_registered (never a "
+            f"visible pair the verdict is an honest not_registered (never a "
             "fabricated model). Contrast enhancement is applied before matching."
+            f" Reference: {reference}."
         ],
     }
+    if saved_csv:
+        report["artifacts"]["correspondences"] = saved_csv
     if best:
+        # carry full match sets so the CSV/proxy was written with actual arrays
         report.update(best_inliers=best.get("inliers"),
                       best_front=best.get("front"),
                       best_band=best.get("band"),

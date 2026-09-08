@@ -276,6 +276,273 @@ def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
 
 
 # --------------------------------------------------------------------------- #
+# TMC / CH2 -> LRO NAC staging (PS 26166: "lunar reference images")
+# --------------------------------------------------------------------------- #
+def _nac_gsd_m(line_axis, samp_axis, lon_g, lat_g):
+    """Mean NAC ground sample distance (m per line, m per sample)."""
+    def _step(axis):
+        a = np.asarray(axis, np.float64)
+        if a.size < 2:
+            return 1.0
+        d = np.abs(np.diff(a))
+        d = d[d > 0]
+        return float(np.median(d)) if d.size else 1.0
+    lat_m, lon_m = 111000.0, 111000.0
+    lon_r = np.deg2rad(lat_g)
+    d_samp = np.hypot(np.diff(lon_g, axis=1) * lon_m * np.cos(lon_r[:, :-1]),
+                      np.diff(lat_g, axis=1) * lat_m) / _step(samp_axis)
+    d_line = np.hypot(np.diff(lon_g, axis=0) * lon_m * np.cos(lon_r[:-1, :]),
+                      np.diff(lat_g, axis=0) * lat_m) / _step(line_axis)
+    vals = np.concatenate([d_samp[np.isfinite(d_samp)],
+                           d_line[np.isfinite(d_line)]])
+    return float(np.median(vals)) if vals.size else np.nan
+
+
+def _sample_subgrid(arr, row, col, pad=8):
+    """Bilinear-sample ``arr`` at float (row, col) positions, 0 outside.
+
+    Uses ``scipy.ndimage.map_coordinates`` (no 32k row limit, unlike
+    ``cv2.remap``), so multi-GB / >32k-row rasters (TMC memmaps, LRO NAC strips)
+    are sampled at a bounded cost without loading full RAM.
+    """
+    row = np.asarray(row, np.float64)
+    col = np.asarray(col, np.float64)
+    fin = np.isfinite(row) & np.isfinite(col)
+    if not fin.any():
+        return np.zeros(row.shape, np.uint8)
+    rr = np.where(fin, row, 0)
+    cc = np.where(fin, col, 0)
+    a = np.asarray(arr)  # uint8 (TMC memmap / as_u8(NAC)); NaN already 0
+    out = map_coordinates(a, np.vstack([rr.ravel(), cc.ravel()]), order=1,
+                          mode="constant", cval=0.0)
+    out = out.reshape(row.shape)
+    out[~fin] = 0.0
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def stage_ch2_nac_pair(src_img, src_geom, nac_img, nac_geom_csv, *,
+                       src_width=None, gsd=None, n_along=1400, out_dir=None,
+                       prefix="ch2_nac"):
+    """Stage a CH2 pushbroom sensor (TMC/OHRC source) onto a common ground grid
+    with an **LRO NAC lunar reference** (SPICE per-line geometry).
+
+    The source is inverse-mapped from its ISRO geometry CSV; the NAC is
+    inverse-mapped with the ``NacInverse`` SPICE Newton solve. Both raw frames
+    are resampled onto the shared equal-GSD lon/lat grid -> a genuine
+    source→lunar-reference geometry registration without any feature matching.
+
+    Returns the same dict contract as ``stage_ch2_ground_pair``.
+    """
+    from src.preprocessing.geometry import load_nac_geom, NacInverse, as_u8
+    from src.preprocessing.georeference import read_nac_img
+
+    spix, sscan, slon, slat = read_ground_grid(src_geom)
+    lon, lat, line, samp = load_nac_geom(nac_geom_csv)
+    nac = read_nac_img(nac_img)
+    # wrap NAC lon into [0, 360) to compare with the ISRO grid convention
+    nlon = lon % 360.0
+    box = overlap_box(slon, slat, nlon, lat)
+    if box is None:
+        return {"overlap": False, "note": "footprints do not overlap on the ground",
+                "src": None, "ref": None}
+
+    gsd_src = float(_gsd_m(spix, sscan, slon, slat))
+    uline = np.unique(line); usamp = np.unique(samp)
+    lon_g = nlon.reshape(len(uline), len(usamp))
+    lat_g = lat.reshape(len(uline), len(usamp))
+    gsd_ref = float(_nac_gsd_m(uline, usamp, lon_g, lat_g))
+    if gsd is None:
+        gsd = max(gsd_src, gsd_ref) if np.isfinite(gsd_src) and np.isfinite(gsd_ref) else 21.7
+
+    lon0, lon1, lat0, lat1 = box
+    mlat = 0.5 * (lat0 + lat1)
+    lat_m = 111000.0
+    lon_m = 111000.0 * np.cos(np.deg2rad(mlat))
+    d_lat = (lat1 - lat0) * lat_m / n_along
+    n_across = max(64, int(round((lon1 - lon0) * lon_m / d_lat)))
+    lats = np.linspace(lat0, lat1, n_along)
+    lons = np.linspace(lon0, lon1, n_across)
+    LAT, LON = np.meshgrid(lats, lons, indexing="ij")
+
+    s_map_scan, s_map_pix = _inverse_maps(spix, sscan, slon, slat)
+    src_scan = s_map_scan(LAT.ravel()[:, None]).ravel()
+    src_pix = s_map_pix(LON.ravel()[:, None]).ravel()
+    inv = NacInverse(lon, lat, line, samp)
+    nac_col, nac_row = inv.apply(LON.ravel(), LAT.ravel())
+    nac_col = nac_col.reshape(LAT.shape); nac_row = nac_row.reshape(LAT.shape)
+
+    s_ll = read_ch2_raw(src_img, src_geom, width=src_width, memmap=True)
+    finite_s = np.isfinite(src_scan) & np.isfinite(src_pix)
+    swath_s = {"row_min": int(src_scan[finite_s].min()),
+               "row_max": int(src_scan[finite_s].max()),
+               "col_min": int(src_pix[finite_s].min()),
+               "col_max": int(src_pix[finite_s].max())}
+    src_g = _sample_subgrid(s_ll, src_scan.reshape(LAT.shape), src_pix.reshape(LAT.shape))
+
+    nac_u8 = as_u8(nac)
+    finite_r = np.isfinite(nac_row) & np.isfinite(nac_col)
+    swath_r = {"row_min": int(nac_row[finite_r].min()),
+               "row_max": int(nac_row[finite_r].max()),
+               "col_min": int(nac_col[finite_r].min()),
+               "col_max": int(nac_col[finite_r].max())}
+    ref_g = _sample_subgrid(nac_u8, nac_row, nac_col)
+
+    result = {
+        "overlap": True, "src": src_g, "ref": ref_g,
+        "gsd_m": float(gsd), "lon0": lon0, "lon1": lon1,
+        "lat0": lat0, "lat1": lat1, "n_along": n_along,
+        "n_across": n_across,
+        "native_src": {"rows": int(s_ll.shape[0]), "cols": int(s_ll.shape[1])},
+        "native_ref": {"rows": int(nac.shape[0]), "cols": int(nac.shape[1])},
+        "swath_src": swath_s, "swath_ref": swath_r,
+        "reference": "LRO NAC",
+        "note": f"ground staged at {gsd:.2f} m/px over "
+                f"[{lon0:.4f},{lon1:.4f}]x[{lat0:.4f},{lat1:.4f}] vs LRO NAC",
+    }
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+        cv2.imwrite(os.path.join(out_dir, f"{prefix}_src.png"), src_g)
+        cv2.imwrite(os.path.join(out_dir, f"{prefix}_ref.png"), ref_g)
+        prev_src, box_s = _make_original_preview(s_ll, src_scan, src_pix)
+        prev_ref, box_r = _make_original_preview(nac_u8, nac_row, nac_col)
+        if prev_src is not None:
+            cv2.imwrite(os.path.join(out_dir, f"{prefix}_before_src.png"),
+                        _draw_highlight_box(prev_src, box_s))
+        if prev_ref is not None:
+            cv2.imwrite(os.path.join(out_dir, f"{prefix}_before_ref.png"),
+                        _draw_highlight_box(prev_ref, box_r))
+        cv2.imwrite(os.path.join(out_dir, f"{prefix}_after_src.png"),
+                    _outline_registered(src_g))
+        cv2.imwrite(os.path.join(out_dir, f"{prefix}_after_ref.png"),
+                    _outline_registered(ref_g))
+        result["original_src"] = (os.path.join(out_dir, f"{prefix}_before_src.png")
+                                  if prev_src is not None else None)
+        result["original_ref"] = (os.path.join(out_dir, f"{prefix}_before_ref.png")
+                                  if prev_ref is not None else None)
+        result["after_src"] = os.path.join(out_dir, f"{prefix}_after_src.png")
+        result["after_ref"] = os.path.join(out_dir, f"{prefix}_after_ref.png")
+        diff = np.abs(src_g.astype(np.int16) - ref_g.astype(np.int16)).astype(np.uint8)
+        diff = percentile_stretch(diff) if diff.max() > diff.min() else diff
+        result["change_map"] = os.path.join(out_dir, f"{prefix}_change.png")
+        cv2.imwrite(result["change_map"], cv2.applyColorMap(diff, cv2.COLORMAP_TURBO))
+        result["montage"] = os.path.join(out_dir, f"{prefix}_montage.png")
+        cv2.imwrite(result["montage"], np.hstack([
+            cv2.imread(result["after_src"]),
+            cv2.imread(result["after_ref"]),
+            cv2.imread(result["change_map"]),
+        ]))
+        with open(os.path.join(out_dir, f"{prefix}_stage.json"), "w") as fh:
+            json.dump({k: v for k, v in result.items()
+                       if not isinstance(v, np.ndarray)}, fh, indent=2)
+    return result
+
+
+def register_ch2_to_nac(src_img, src_geom, nac_img, nac_geom_csv, *, out_dir,
+                        src_width=None, prefix="ch2_nac", n_along=1400,
+                        min_inliers=10, min_ratio=0.02, nfeatures=10000,
+                        contrast_threshold=0.02, verbose=True, **match_kw):
+    """Register a CH2 source (TMC/OHRC) against the **LRO NAC lunar reference**.
+
+    Content-first (enhanced cross-modal pair, sub-pixel RMSE + inlier
+    correspondences CSV when it succeeds); SPICE + ISRO ground-grid geometry
+    registration as the honest fallback for dark/low-sun/polar pairs (aligned
+    products + the explicit "content NOT verifiable" note). Never fabricates a
+    model.
+    """
+    from src.detection.cross_modal import cross_modal_register
+
+    os.makedirs(out_dir, exist_ok=True)
+    report = {
+        "pair": {"src": os.path.basename(src_img),
+                 "ref": os.path.basename(nac_img)},
+        "reference": "LRO NAC",
+        "method": None, "verdict": None, "rmse_px": None, "inliers": 0,
+        "inlier_ratio": 0.0, "n_matches": 0, "homography": None,
+        "gsd_m": None, "artifacts": {}, "notes": [],
+    }
+
+    spix, sscan, slon, slat = read_ground_grid(src_geom)
+    from src.preprocessing.geometry import load_nac_geom
+    nlon_arr, nlat_arr, _l, _s = load_nac_geom(nac_geom_csv)
+    box = overlap_box(slon, slat, nlon_arr % 360.0, nlat_arr)
+    report["georef"] = {
+        "src": {"lon": [float(slon.min()), float(slon.max())],
+                "lat": [float(slat.min()), float(slat.max())],
+                "gsd_m": _gsd_m(spix, sscan, slon, slat)},
+        "ref": {"lon": [float(nlon_arr.min()), float(nlon_arr.max())],
+                "lat": [float(nlat_arr.min()), float(nlat_arr.max())],
+                "gsd_m": None, "sensor": "LRO NAC"},
+        "overlap": bool(box is not None),
+    }
+    if box is None:
+        report.update(verdict="not_registered",
+                      notes=["footprints do not overlap on the ground"])
+        _dump(report, out_dir, prefix)
+        return report
+
+    st = stage_ch2_nac_pair(src_img, src_geom, nac_img, nac_geom_csv,
+                            src_width=src_width, n_along=n_along,
+                            out_dir=out_dir, prefix=prefix)
+    if not st["overlap"]:
+        report.update(verdict="not_registered", notes=["ground staging failed"])
+        _dump(report, out_dir, prefix)
+        return report
+    report["gsd_m"] = st["gsd_m"]
+    report["dimensions"] = {
+        "native_src": st["native_src"], "native_ref": st["native_ref"],
+        "swath_src": st["swath_src"], "swath_ref": st["swath_ref"],
+        "grid_along": st["n_along"], "grid_across": st["n_across"],
+        "gsd_m": st["gsd_m"],
+    }
+    src, ref = st["src"], st["ref"]
+    src_e, ref_e = enhance_dark(src), enhance_dark(ref)
+    report["diagnostics"] = {
+        "src_low_contrast": round(low_contrast_score(src), 3),
+        "ref_low_contrast": round(low_contrast_score(ref), 3),
+        "src_mean": float(src.mean()), "ref_mean": float(ref.mean()),
+    }
+    for k in ("src", "ref", "original_src", "original_ref",
+              "after_src", "after_ref", "change_map", "montage"):
+        if st.get(k) is not None:
+            report["artifacts"][k] = st[k]
+    report["notes"].append(st["note"])
+
+    res = cross_modal_register(src_e, ref_e, min_inliers=min_inliers,
+                               min_ratio=min_ratio, nfeatures=nfeatures,
+                               contrast_threshold=contrast_threshold,
+                               verbose=False, **match_kw)
+    report["n_matches"] = res["n_matches"] if res else 0
+    if res is not None:
+        report.update(
+            method=f"content:{res['front']}",
+            verdict="registered",
+            inliers=int(res["inliers"]),
+            inlier_ratio=float(res["inlier_ratio"]),
+            rmse_px=float(res["rmse"]),
+            homography=res["H"].tolist(),
+        )
+        report["notes"].append(
+            f"content registration on enhanced CH2<->NAC pair; "
+            f"front={res['front']}")
+        _write_content_fig(report, src_e, ref_e, res, out_dir, prefix)
+        _save_correspondences(report, res, out_dir, prefix)
+    else:
+        report.update(
+            method="geometry",
+            verdict="geometry_registered",
+            notes=report["notes"]
+            + ["content correspondence NOT verifiable (dark/low-sun/polar or "
+               "featureless); registered by ISRO CSV + LRO NAC SPICE on a "
+               "common ground grid"],
+        )
+    if verbose:
+        print(f"[register_ch2_to_nac] verdict={report['verdict']} "
+              f"method={report['method']} inliers={report['inliers']}")
+    _dump(report, out_dir, prefix)
+    return report
+
+
+# --------------------------------------------------------------------------- #
 # layered registration decision
 # --------------------------------------------------------------------------- #
 def register_ch2_pair(src_img, src_geom, ref_img, ref_geom, *, out_dir,
