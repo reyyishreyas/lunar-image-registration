@@ -537,7 +537,30 @@ Restart phases (each gets its own branch off updated main, per AGENTS.md):
       (equal-GSD warp scaffold, WIP), `requirements.txt`, `results/logs/phase5_verdict_reversal.md`.
 
 ### Restart Phase 1 — Foundation: equal-GSD staging + photometric preconditioning
+- [x] Abandoned classical content-matching of pair 2 after exhaustive negative
+      evidence (this is a photometric-gap block, not a staging bug): DISK+LightGlue
+      self-match 1986/1953 vs cross-match 0; all 4 mirror + 2 transpose hypotheses
+      0; full-strip 2-D sweep only 8 spurious singles; apparent low-frequency FFT
+      lock disproven by row-reversed null (peak 8000 vs null 7362, ~92% of true).
+      OHRC-2026 sun elevation 1.9° (ISRO metadata). Evidence log:
+      `results/logs/pair2_photometric_gap.md`.
+  RESULT: pass — content correspondence of pair 2 is NOT recoverable; geometry is
+      the only valid registration path.
+- [x] Pair 2 geometry-based registration (SPICE+CSV, equal-GSD staging):
+      `src/preprocessing/geometry.py` (module CLI) validates NAC forward/inverse
+      to <1e-11 km, 2000/2000 OHRC points inverse in-bounds (100%), ODE overlap
+      100% on all four downloaded NAC candidates (only M1127547939RC is 100%;
+      M1182892612LC 93.3%, M1298165405LC 96.8%, M181587967LC 96.4%), and writes
+      `data/processed/georef_phase5.json` + `phase5_{src,ref,overlay}.png` at a
+      staged 60 m GSD grid 1536×194 over lon 296.086-296.213, lat 7.324-8.161
+      (OHRC native ~0.99/0.97 m/px confirmed by geometry). The three
+      sub-100% NACs remain valid only if a future photometric rescue enables
+      content matching.
+  RESULT: pass — `data/processed/georef_phase5.json`, grid 1536×194 @ 60 m, coverage
+      in_bounds_frac 1.0, pos_err_km_mean 5.9e-13.
 - [ ] Next step (not started): make every matching stage operate at a common GSD
       (no more fixed `nac_fac` guesses), add per-config photometric
-      preconditioning (`none | clahe | edges`), re-run FINAL_CONFIG on pair 1 as
-      regression, then attempt pair 2 against all four downloaded NACs.
+      preconditioning (`none | clahe | edges`), and re-run FINAL_CONFIG on pair 1
+      as regression.
+  RESULT: pass (regression only) — FINAL_CONFIG pair 1: RMSE 22.6172 px, 235
+      inliers, ratio 0.8217, identical to Phase 4 champion (49ea6e9 baseline).

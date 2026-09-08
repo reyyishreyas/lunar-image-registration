@@ -12,3 +12,4 @@ C10,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6172,235
 C11,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,cornerSubPix,22.65,235,0.8217,286,1.53,0.0,
 C12,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,phase_corr,22.6379,235,0.8217,286,8.95,0.0,
 C9,polar test sun_el=1.9deg (OHRC-2026+NAC M1127547939RC),sift,bf_ratio:0.75,usac_magsac:5.0,,FAIL,0,0,0,37.9,37.9,georeference: no reliable OHRC<->NAC overlap (inliers=14). Boosted fallback rejected (mirror-group dominance/NCC); see data/processed/georef_phase5_diagnostics.json
+FINAL,georef+clahe:4.0 (crop 1024x1024),sift,bf_ratio:0.75,ransac:5.0,,22.6172,235,0.8217,286,1.63,0.0
