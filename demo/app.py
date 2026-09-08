@@ -203,8 +203,10 @@ def _render_before_after(rep, src_name="Source", ref_name="Reference"):
     st.markdown("#### Before → After")
     a, b = st.columns(2)
     o_src, o_ref = arts.get("original_src"), arts.get("original_ref")
-    bcap_before_src = f"**Before · {src_name}** raw strip (display-stretched)"
-    bcap_before_ref = f"**Before · {ref_name}** raw strip (display-stretched)"
+    bcap_before_src = (f"**Before · {src_name}** raw strip — "
+                       "red box = overlap swath registered")
+    bcap_before_ref = (f"**Before · {ref_name}** raw strip — "
+                       "red box = overlap swath registered")
     if o_src and os.path.exists(os.path.join(ROOT, o_src)):
         a.image(os.path.join(ROOT, o_src), caption=bcap_before_src,
                 width="stretch")
@@ -221,15 +223,21 @@ def _render_before_after(rep, src_name="Source", ref_name="Reference"):
     st.markdown("⬇  **After** — both re-projected on a common geographic grid"
                 + gsd_txt)
     c, d = st.columns(2)
-    src, ref = arts.get("src"), arts.get("ref")
+    src, ref = arts.get("after_src"), arts.get("after_ref")
+    if not src:
+        src = arts.get("src")
+    if not ref:
+        ref = arts.get("ref")
+    ccap = f"**After · {src_name}** — {after_txt} (red outline)"
+    dcap = f"**After · {ref_name}** — {after_txt} (red outline)"
     if src and os.path.exists(os.path.join(ROOT, src)):
-        c.image(os.path.join(ROOT, src),
-                caption=f"**After · {src_name}** — {after_txt}",
-                width="stretch")
+        c.image(os.path.join(ROOT, src), caption=ccap, width="stretch")
     if ref and os.path.exists(os.path.join(ROOT, ref)):
-        d.image(os.path.join(ROOT, ref),
-                caption=f"**After · {ref_name}** — {after_txt}",
-                width="stretch")
+        d.image(os.path.join(ROOT, ref), caption=dcap, width="stretch")
+    st.caption("How to read this: the red box on each raw strip is the exact "
+               "overlap swath the pipeline extracted; the red-outlined panels "
+               "are that same data re-projected onto one shared geographic grid "
+               "at equal ground-sample distance.")
 
 
 def _render_sensor(res):

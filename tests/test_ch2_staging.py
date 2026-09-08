@@ -15,6 +15,9 @@ from src.preprocessing.ch2_staging import (
     low_contrast_score,
     stage_ch2_ground_pair,
     register_ch2_pair,
+    _make_original_preview,
+    _draw_highlight_box,
+    _outline_registered,
 )
 from src.preprocessing.tmc import read_ground_grid, _gsd_m  # noqa: F401
 
@@ -127,3 +130,28 @@ def test_register_ch2_pair_geometry_fallback_dark(tmp_path):
     if rep["verdict"] == "geometry_registered":
         assert rep["method"] == "geometry"
         assert "NOT verifiable" in rep["notes"][-1]
+
+
+def test_original_preview_box_and_highlights(tmp_path):
+    # synthetic strip: 3000 rows x 200 cols, gradient so preview has content
+    ll = np.tile(np.arange(200, dtype=np.uint8) * 4, (3000, 1))
+    scan = np.array([400.0, 900.0, 1200.0, 2100.0])
+    pix = np.array([30.0, 90.0, 130.0, 170.0])
+    prev, box = _make_original_preview(ll, scan, pix)
+    assert prev is not None and box is not None
+    h, w = prev.shape
+    assert h <= 1600 and w <= 640
+    x0, y0, x1, y1 = box
+    assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
+
+    # a colour highlight is actually drawn
+    import cv2
+    boxed = _draw_highlight_box(prev, box)
+    outlined = _outline_registered(prev)
+    assert boxed.ndim == 3 and outlined.ndim == 3
+    red = ((boxed[:, :, 2].astype(int) > 150)
+           & (boxed[:, :, 0].astype(int) < 60)).sum()
+    assert red > 0, "highlight box must draw red pixels"
+    red2 = ((outlined[:, :, 2].astype(int) > 150)
+            & (outlined[:, :, 0].astype(int) < 60)).sum()
+    assert red2 > 0, "registered outline must draw red pixels"

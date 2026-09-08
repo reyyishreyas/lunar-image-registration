@@ -110,3 +110,18 @@ gaps these sensors present, **without disturbing the working Phase 8 code**
   not_registered -> "processed working crops (enhanced)").
 - Verified: TMC pair -> original_src 1290x103 / original_ref 1587x203 valid PNGs;
   IIRS pair artifacts valid; suite 64 passed; AppTest renders before/after.
+
+## Highlighted before/after (visible change markers)
+
+Users found the before/after panels too similar (both are display-stretched
+re-projections). Added explicit red highlight markers:
+- _make_original_preview now builds a CONTEXT window around the overlap swath
+  and returns the inner-overlap box in preview coords.
+- _draw_highlight_box draws a red rectangle on each raw strip marking the exact
+  swath extracted; _outline_registered draws a red outline on the registered
+  product (ch2_staging + iirs emit before_*/after_* PNGs).
+- demo/app._render_before_after uses these and adds a caption explaining "red
+  box = overlap swath extracted; red outline = the same data re-projected on
+  the common grid".
+- New test test_original_preview_box_and_highlights; suite 65 passed; AppTest
+  renders the legend.

@@ -169,7 +169,7 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     # then lift contrast (IIRS IR vs visible OHRC differ radiometrically and the
     # OHRC may be a dark/polar hard case).
     from src.preprocessing.ch2_staging import (enhance_dark, low_contrast_score,
-                                                percentile_stretch)
+                                                percentile_stretch, _outline_registered)
     ohrc = read_ch2_raw(ohrc_img, ohrc_geom, width=OHRC_WIDTH)
     rows, cols = ohrc.shape
     mid = rows // 2
@@ -223,8 +223,12 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     cv2.imwrite(prev_ref, _bin_preview(ohrc_crop_before))
     proc_src = os.path.join(out_dir, f"{prefix}_src.png")
     proc_ref = os.path.join(out_dir, f"{prefix}_ref.png")
+    after_src = os.path.join(out_dir, f"{prefix}_after_src.png")
+    after_ref = os.path.join(out_dir, f"{prefix}_after_ref.png")
     cv2.imwrite(proc_src, enhance_dark(u_ws))
     cv2.imwrite(proc_ref, ohrc_ref)
+    cv2.imwrite(after_src, _outline_registered(enhance_dark(u_ws)))
+    cv2.imwrite(after_ref, _outline_registered(ohrc_ref))
 
     report = {
         "pair": "IIRS -> OHRC",
@@ -238,6 +242,8 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         "artifacts": {
             "original_src": prev_src,
             "original_ref": prev_ref,
+            "after_src": after_src,
+            "after_ref": after_ref,
             "src": proc_src,
             "ref": proc_ref,
         },

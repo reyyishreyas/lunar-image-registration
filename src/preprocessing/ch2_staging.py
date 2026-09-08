@@ -107,34 +107,61 @@ def _inverse_maps(pix_axis, scan_axis, lon_grid, lat_grid):
     return f_scan, f_pix
 
 
-def _write_original_preview(ll, scan_vals, pix_vals, path, max_w=640, max_h=1600):
-    """Write a display-ready 'before' preview: the native raw strip window that
-    the overlap box maps onto, bin-downsampled to ``max_w`` columns wide so the
-    huge CH2 products stay cheap to write. Mild percentile stretch for display
-    (the comparable raw frame would otherwise be near-black on dark/low-sun
-    products). Returns True on success."""
+RECT_COLOR = (0, 0, 255)  # BGR red
+
+
+def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600):
+    """Build a display-ready 'before' strip: a context window around the native
+    overlap region the geometry maps onto, bin-downsampled to ``max_w``/``max_h``.
+
+    Returns ``(preview_gray_uint8, box)`` where ``box = (x0, y0, x1, y1)`` is the
+    inner overlap window in preview-pixel coordinates (so callers can draw a
+    highlight rectangle). Returns ``(None, None)`` when no finite window exists."""
     finite = np.isfinite(scan_vals) & np.isfinite(pix_vals)
-    scan = scan_vals[finite]; pix = pix_vals[finite]
+    scan, pix = scan_vals[finite], pix_vals[finite]
     if scan.size == 0 or pix.size == 0 or ll is None:
-        return False
+        return None, None
     rows, cols = ll.shape
     s0 = max(int(np.floor(scan.min())) - 4, 0)
     s1 = min(int(np.ceil(scan.max())) + 4, rows - 1)
     p0 = max(int(np.floor(pix.min())) - 4, 0)
     p1 = min(int(np.ceil(pix.max())) + 4, cols - 1)
     if s1 <= s0 or p1 <= p0:
-        return False
-    crop = np.ascontiguousarray(ll[s0:s1, p0:p1]).astype(np.float32)
+        return None, None
+    span_s, span_p = s1 - s0, p1 - p0
+    c0 = max(0, s0 - int(span_s * 0.4)); c1 = min(rows, s1 + int(span_s * 0.4))
+    d0 = max(0, p0 - int(span_p * 0.4)); d1 = min(cols, p1 + int(span_p * 0.4))
+    crop = np.ascontiguousarray(ll[c0:c1, d0:d1]).astype(np.float32)
     fac = 1
     if crop.shape[1] > max_w or crop.shape[0] > max_h:
         fac = max(int(np.ceil(crop.shape[1] / max_w)),
                   int(np.ceil(crop.shape[0] / max_h)), 1)
         h2, w2 = crop.shape[0] // fac, crop.shape[1] // fac * fac
         crop = crop[:h2 * fac, :w2].reshape(h2, fac, w2 // fac, fac).mean(axis=(1, 3))
-    out = (percentile_stretch(crop) if crop.max() > crop.min()
-           else np.zeros_like(crop)).astype(np.uint8)
-    cv2.imwrite(path, out)
-    return True
+    prev = (percentile_stretch(crop) if crop.max() > crop.min()
+            else np.zeros_like(crop)).astype(np.uint8)
+    box = (int((p0 - d0) / fac), int((s0 - c0) / fac),
+           int((p1 - d0) / fac), int((s1 - c0) / fac))
+    return prev, box
+
+
+def _draw_highlight_box(gray, box):
+    """Red rectangle around the extracted overlap window (before annotations)."""
+    bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    if box:
+        x0, y0, x1, y1 = box
+        t = max(2, int(min(bgr.shape[:2]) / 150))
+        cv2.rectangle(bgr, (x0, y0), (x1, y1), RECT_COLOR, t)
+    return bgr
+
+
+def _outline_registered(gray):
+    """Thin red outline around a registered product (after annotations)."""
+    bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    h, w = bgr.shape[:2]
+    t = max(2, int(min(h, w) / 150))
+    cv2.rectangle(bgr, (0, 0), (w - 1, h - 1), RECT_COLOR, t)
+    return bgr
 
 
 def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
@@ -211,12 +238,22 @@ def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
         os.makedirs(out_dir, exist_ok=True)
         cv2.imwrite(os.path.join(out_dir, f"{prefix}_src.png"), src_g)
         cv2.imwrite(os.path.join(out_dir, f"{prefix}_ref.png"), ref_g)
-        prev_src = os.path.join(out_dir, f"{prefix}_original_src.png")
-        prev_ref = os.path.join(out_dir, f"{prefix}_original_ref.png")
-        ok_s = _write_original_preview(s_ll, s_scan, s_pix, prev_src)
-        ok_r = _write_original_preview(r_ll, r_scan, r_pix, prev_ref)
-        result["original_src"] = prev_src if ok_s else None
-        result["original_ref"] = prev_ref if ok_r else None
+        before_src = os.path.join(out_dir, f"{prefix}_before_src.png")
+        before_ref = os.path.join(out_dir, f"{prefix}_before_ref.png")
+        after_src = os.path.join(out_dir, f"{prefix}_after_src.png")
+        after_ref = os.path.join(out_dir, f"{prefix}_after_ref.png")
+        prev_src, box_s = _make_original_preview(s_ll, s_scan, s_pix)
+        prev_ref, box_r = _make_original_preview(r_ll, r_scan, r_pix)
+        if prev_src is not None:
+            cv2.imwrite(before_src, _draw_highlight_box(prev_src, box_s))
+        if prev_ref is not None:
+            cv2.imwrite(before_ref, _draw_highlight_box(prev_ref, box_r))
+        cv2.imwrite(after_src, _outline_registered(src_g))
+        cv2.imwrite(after_ref, _outline_registered(ref_g))
+        result["original_src"] = before_src if prev_src is not None else None
+        result["original_ref"] = before_ref if prev_ref is not None else None
+        result["after_src"] = after_src
+        result["after_ref"] = after_ref
         with open(os.path.join(out_dir, f"{prefix}_stage.json"), "w") as fh:
             json.dump({k: v for k, v in result.items()
                        if not isinstance(v, np.ndarray)}, fh, indent=2)
@@ -292,6 +329,10 @@ def register_ch2_pair(src_img, src_geom, ref_img, ref_geom, *, out_dir,
         report["artifacts"]["original_src"] = st["original_src"]
     if st.get("original_ref"):
         report["artifacts"]["original_ref"] = st["original_ref"]
+    if st.get("after_src"):
+        report["artifacts"]["after_src"] = st["after_src"]
+    if st.get("after_ref"):
+        report["artifacts"]["after_ref"] = st["after_ref"]
     report["notes"].append(st["note"])
 
     # --- 2. content attempt on enhanced pair ---
