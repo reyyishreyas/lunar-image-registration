@@ -15,6 +15,7 @@ from src.preprocessing.ch2_staging import (
     low_contrast_score,
     stage_ch2_ground_pair,
     register_ch2_pair,
+    GroundGridInverse,
     _make_original_preview,
     _draw_highlight_box,
     _outline_registered,
@@ -48,6 +49,46 @@ def test_overlap_box_intersecting():
     B = (np.array([3., 7.]), np.array([2., 6.]))
     b = overlap_box(*A, *B)
     assert b == pytest.approx((3.0, 5.0, 2.0, 5.0))
+
+
+def test_ground_grid_inverse_separable_grid():
+    # pure separable grid: lon is a function of pixel only, lat of scan only
+    scan_ax = np.linspace(0, 5000, 51)
+    pix_ax = np.linspace(0, 2000, 21)
+    S, P = np.meshgrid(scan_ax, pix_ax, indexing="ij")
+    lon0, lat0 = 296.0, 8.0
+    dlon, dlat = -2e-5, 1e-4
+    lon = lon0 + dlon * P
+    lat = lat0 + dlat * S
+    inv = GroundGridInverse(pix_ax, scan_ax, lon, lat)
+    rng = np.random.default_rng(1)
+    P0 = rng.uniform(50, 1900, 64)
+    S0 = rng.uniform(100, 4800, 64)
+    lo0, la0 = lon0 + dlon * P0, lat0 + dlat * S0
+    S1, P1 = inv.apply(lo0, la0)
+    assert np.allclose(S1, S0, atol=1e-3)
+    assert np.allclose(P1, P0, atol=1e-3)
+
+
+def test_ground_grid_inverse_sweeping_grid():
+    # sweeping strip: lat depends on BOTH scan and pixel so the old separable
+    # (median-axis) inverse is badly wrong; the 2-D Newton inverse must still
+    # round-trip. This is the TMC-2026 -> NAC staging regression guard.
+    scan_ax = np.linspace(0, 5000, 51)
+    pix_ax = np.linspace(0, 2000, 21)
+    S, P = np.meshgrid(scan_ax, pix_ax, indexing="ij")
+    lon0, lat0 = 296.0, 8.0
+    # lon leans on scan too, lat leans on pixel too (coupled / tilted strip)
+    lon = lon0 - 2e-5 * P - 3e-6 * S
+    lat = lat0 + 1e-4 * S + 8e-6 * P
+    inv = GroundGridInverse(pix_ax, scan_ax, lon, lat)
+    rng = np.random.default_rng(2)
+    P0 = rng.uniform(50, 1900, 64)
+    S0 = rng.uniform(100, 4800, 64)
+    lo0, la0 = lon0 - 2e-5 * P0 - 3e-6 * S0, lat0 + 1e-4 * S0 + 8e-6 * P0
+    S1, P1 = inv.apply(lo0, la0)
+    assert np.allclose(S1, S0, atol=1e-2)
+    assert np.allclose(P1, P0, atol=1e-2)
 
 
 def test_overlap_box_disjoint_returns_none():

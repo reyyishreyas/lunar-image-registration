@@ -171,13 +171,34 @@ def cross_modal_register(src, ref, *, fronts=NORM_FRONTS,
             pw = pts1[inl]
             pw_h = np.hstack([pw, np.ones((pw.shape[0], 1))])
             proj = (H @ pw_h.T).T
-            proj = proj[:, :2] / np.maximum(proj[:, 2:3], 1e-12)
-            rmse = float(np.sqrt(np.mean(np.sum((proj - pts2[inl]) ** 2, axis=1))))
-            stat["rmse"] = round(rmse, 4)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                proj = proj[:, :2] / np.where(proj[:, 2:3] == 0, np.nan,
+                                              proj[:, 2:3])
+            diffs = np.sqrt(np.nansum((proj - pts2[inl]) ** 2, axis=1))
+            rmse = float(np.sqrt(np.nanmean(diffs ** 2))) if np.isfinite(
+                diffs).any() else float("inf")
+            stat["rmse"] = rmse
+            # sanity: reject exploded / degenerate models. Also require the
+            # inlier set to actually span the image (a cluster of near-identical
+            # points gives ~0 RMSE but a meaningless homography), and the
+            # homography itself to be well conditioned (RANSAC occasionally
+            # returns near-singular matrices that compress the domain
+            # invisibly in the inlier frame but garbage globally).
+            span = (pw.max(axis=0) - pw.min(axis=0))
+            span_px = float(np.sqrt(np.sum(span ** 2)))
+            min_span = 0.15 * float(np.sqrt(src.shape[0] ** 2 + src.shape[1] ** 2))
+            cond = float(np.linalg.cond(H))
+            scale_ok = min(abs(H[0, 0]), abs(H[1, 1])) > 1e-2
+            if (not np.isfinite(rmse) or np.isnan(rmse) or rmse > 25.0
+                    or span_px < min_span or cond > 1e6 or not scale_ok):
+                stat["note"] = (f"degenerate fit (rmse={rmse:.3g}, "
+                                f"span={span_px:.1f}px, cond={cond:.1e})")
+                continue
             stat["H"] = H
             stat["kp1"], stat["kp2"] = kp1, kp2
             stat["pts1"], stat["pts2"] = pts1, pts2
             stat["inl"] = inl
+            stat["matches"] = m
             if best is None or nin > best["inliers"]:
                 best = dict(stat)
     if best is not None:
