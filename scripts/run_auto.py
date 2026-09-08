@@ -43,9 +43,11 @@ def main():
     ap = argparse.ArgumentParser(
         description="fully-automatic lunar registration (CLI)")
     ap.add_argument("--sensor", default="ohrc-nac",
-                    choices=["ohrc-nac", "tmc-ohrc", "iirs-ohrc",
-                             "tmc-nac", "iirs-nac"],
-                    help="sensor pair to register (default ohrc-nac)")
+                    choices=["any", "ohrc-nac", "tmc-ohrc", "iirs-ohrc",
+                             "tmc-nac", "iirs-nac", "ohrc-ohrc", "tmc-tmc",
+                             "iirs-iirs", "ohrc-tmc"],
+                    help="sensor pair to register; 'any' auto-detects each "
+                         "file's sensor from its name (default ohrc-nac)")
     ap.add_argument("--src_img", required=True,
                     help="source: OHRC/TMC raw .img, or IIRS .qub")
     ap.add_argument("--src_geom", required=True,
@@ -66,7 +68,14 @@ def main():
                     help="stage both sensors to a common ground grid (SPICE seed)")
     args = ap.parse_args()
 
-    if args.sensor == "ohrc-nac":
+    if args.sensor == "any":
+        from src.auto_pipeline import detect_pair
+        sensor_pair = detect_pair(args.src_img, args.ref_img)
+        print(f"[run_auto] auto-detected sensor pair: {sensor_pair}")
+    else:
+        sensor_pair = args.sensor
+
+    if sensor_pair == "ohrc-nac":
         gt = "" if args.no_ground_truth else args.ground_truth
         report = run_auto(
             args.src_img, args.src_geom, args.ref_img,
@@ -76,7 +85,7 @@ def main():
         )
     else:
         report = run_sensor_auto(
-            args.sensor, args.src_img, args.src_geom, args.ref_img, args.ref_geom,
+            sensor_pair, args.src_img, args.src_geom, args.ref_img, args.ref_geom,
             out_dir=args.out_dir, prefix=args.prefix,
         )
     print("\n" + summarize(report))
