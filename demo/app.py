@@ -162,6 +162,31 @@ def _friendly_status(verdict):
     return table.get(verdict, ("ℹ️", verdict or "No verdict", "info"))
 
 
+def _decision_banner(rep):
+    """Big MATCH / NO MATCH banner from the Phase-10 decision layer.
+
+    Uses the evidence-based ``report["decision"]`` when present, so the
+    headline reflects the true cause (content match / dark crop / frame
+    disagreement / cross-sensor), never a guessed one.
+    """
+    d = rep.get("decision") or {}
+    if not d:
+        return
+    matched = bool(d.get("matched"))
+    cause = d.get("cause", "")
+    kind = "success" if matched else \
+        ("info" if cause == "frame_disagreement" else "warning")
+    icon = "✅ MATCH" if matched else "⛔ NO MATCH"
+    st.markdown(
+        f"<h3 style='margin-bottom:0'>{icon}</h3>"
+        f"<div style='opacity:.85'>{d.get('explanation', '')}</div>",
+        unsafe_allow_html=True)
+    best = d.get("best_product")
+    if best and os.path.exists(os.path.join(ROOT, str(best))):
+        hint = " — open it in the panel below" if best else ""
+        st.caption(f"Best aligned product: `{best}`{hint}")
+
+
 def _sensor_metric_cols(rep):
     verdict = rep.get("verdict")
     c = st.columns(4)
@@ -219,7 +244,27 @@ def _render_ground_artifacts(rep, src_name="Source", ref_name="Reference"):
     corr = arts.get("correspondences")
     if corr and os.path.exists(os.path.join(ROOT, corr)):
         st.caption(f"Corresponding match points saved: `{corr}` "
+                   " "
                    f"({rep.get('inlier_points_saved', '?')} inlier pairs).")
+
+
+def _render_best_product(rep):
+    """Show the best aligned product when the decision layer produced one."""
+    d = rep.get("decision") or {}
+    aligned = (rep.get("artifacts") or {}).get("best_aligned") or \
+        d.get("best_product")
+    diff = (rep.get("artifacts") or {}).get("diff")
+    if not aligned or not os.path.exists(os.path.join(ROOT, str(aligned))):
+        return
+    st.markdown("#### Best aligned product")
+    st.image(_framed(os.path.join(ROOT, str(aligned)), "BEST ALIGNED"),
+             caption="Source warped onto the reference frame (content matches "
+                     "only — this is the deliverable image).",
+             width="stretch")
+    if diff and os.path.exists(os.path.join(ROOT, str(diff))):
+        st.image(_framed(os.path.join(ROOT, str(diff)), "DIFF"),
+                 caption="Pixel-level difference map against the reference "
+                         "after alignment — warm = changed.", width="stretch")
 
 
 def _render_before_after(rep, src_name="Source", ref_name="Reference"):
@@ -296,6 +341,7 @@ def _render_sensor(res):
     rep = res.get("report", {})
     sensor = res.get("sensor", "tmc-ohrc")
     src_name, ref_name = _sensor_labels(sensor)
+    _decision_banner(rep)
     verdict = _sensor_metric_cols(rep)
     icon, headline, kind = _friendly_status(verdict)
     getattr(st, kind)(f"{icon} **{headline}**")
@@ -365,6 +411,7 @@ def _render_sensor(res):
     _render_before_after(rep, src_name, ref_name)
     _render_what_changed(rep, src_name, ref_name)
     _render_check_it(rep, src_name, ref_name)
+    _render_best_product(rep)
 
     georef = rep.get("georef") or {}
     if georef:
@@ -484,17 +531,14 @@ def _render_check_it(rep, src_name, ref_name):
 
 def _sensor_labels(sensor):
     """Display names for each instrument in a sensor route."""
-    src = {
-        "tmc-ohrc": "TMC — Chandrayaan-2",
-        "iirs-ohrc": "IIRS — Chandrayaan-2",
-        "ohrc-nac": "OHRC — Chandrayaan-2",
-    }.get(sensor, "Source")
-    ref = {
-        "tmc-ohrc": "OHRC — Chandrayaan-2",
-        "iirs-ohrc": "OHRC — Chandrayaan-2",
-        "ohrc-nac": "LRO NAC",
-    }.get(sensor, "Reference")
-    return src, ref
+    instr = {
+        "tmc": "TMC — Chandrayaan-2",
+        "iirs": "IIRS — Chandrayaan-2",
+        "ohrc": "OHRC — Chandrayaan-2",
+        "nac": "LRO NAC",
+    }
+    s, r = (sensor.split("-") + ["", ""])[:2]
+    return instr.get(s, "Source"), instr.get(r, "Reference")
 
 
 def _render_pipeline_trace(rep, sensor="tmc-ohrc"):
@@ -627,8 +671,9 @@ def main():
 
     with st.sidebar:
         mode = st.radio("Input mode", [
-            "Automatic registration",
+            "Any image pair (auto-detect)",
             "Multi-sensor registration (TMC / IIRS)",
+            "Automatic registration",
             "Project pair-1",
             "Project pair-2 (polar, geometry registration)",
             "Upload aligned crops",
@@ -645,6 +690,13 @@ def main():
         if sensor_res.get("report"):
             st.subheader("Results")
             _render_sensor(sensor_res)
+        return
+
+    if mode.startswith("Any image"):
+        any_res = _execute_any()
+        if any_res.get("report"):
+            st.subheader("Results")
+            _render_sensor(any_res)
         return
 
     if st.button("Run pipeline (FINAL_CONFIG)"):
@@ -934,6 +986,95 @@ def _execute_sensor():
         return {"mode": "sensor", "sensor": preset["sensor"],
                 "report": st.session_state["sensor_report"]}
     return {"error": "Press the button to start registration.", "notes": {}}
+
+
+def _execute_any():
+    """Drop any two images (OHRC / TMC / IIRS / NAC): auto-detect the sensor
+    pair, register, and give the definitive MATCH / NO MATCH decision."""
+    from src.auto_pipeline import detect_pair, run_sensor_auto
+
+    st.caption("Give the app any two Chandrayaan-2 / LRO images. The sensor of "
+               "each file is detected from its name (`ch2_ohr*`, `ch2_tmc*`, "
+               "`ch2_iir*`, `M1………….IMG`/`.qub`), the right register runs, and "
+               "you get a clear **MATCH** or **NO MATCH** with the reason and "
+               "the best aligned product.")
+
+    presets = _any_presets()
+    label = st.selectbox("Example pair", list(presets.keys()))
+    p = presets[label]
+    st.caption(p.get("note", ""))
+
+    src_img = st.text_input("Source image path", value=p["src_img"])
+    src_geom = st.text_input("Source geometry", value=p["src_geom"],
+                             help="ISRO ground-grid CSV (OHRC/TMC) or IIRS .hdr")
+    ref_img = st.text_input("Reference image path", value=p["ref_img"])
+    ref_geom = st.text_input("Reference geometry", value=p["ref_geom"],
+                             help="NAC SPICE geometry CSV (optional)")
+
+    if st.button("Register this pair", type="primary"):
+        try:
+            pair = detect_pair(src_img, ref_img)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Auto-detect failed: {exc}")
+            return {"error": str(exc), "notes": {}}
+        st.write(f"Detected sensor pair: **{pair}**")
+        out_dir = os.path.join(DEMO_DIR, "any")
+        prefix = pair.replace("-", "_")
+        with st.spinner("Registering… this runs the real pipeline, be patient."):
+            report = run_sensor_auto(
+                pair, src_img, src_geom, ref_img, ref_geom,
+                out_dir=os.path.relpath(out_dir, ROOT), prefix=prefix,
+                root=ROOT, verbose=True,
+            )
+            if "decision" not in report:
+                from src.evaluation.decision import classify
+                report["decision"] = classify(report)
+        st.session_state["sensor_report"] = report
+        st.session_state["any_sensor"] = pair
+    if st.session_state.get("sensor_report"):
+        return {"mode": "sensor",
+                "sensor": st.session_state.get("any_sensor", "any"),
+                "report": st.session_state["sensor_report"]}
+    return {"error": "Choose a pair and press **Register this pair**.", "notes": {}}
+
+
+def _any_presets():
+    """A curated set of real on-disk pairs for the 'any image pair' demo."""
+    P001 = "data/PATCH-001/data"
+    ohrc = (f"{P001}/OHRC/ch2_ohr_ncp_20210405T1606536730_d_img_d18/data/"
+            "calibrated/20210405/ch2_ohr_ncp_20210405T1606536730_d_img_d18.img")
+    ohrc_g = (f"{P001}/OHRC/ch2_ohr_ncp_20210405T1606536730_d_img_d18/geometry/"
+              "calibrated/20210405/ch2_ohr_ncp_20210405T1606536730_g_grd_d18.csv")
+    nac1 = f"{P001}/LRO_NAC/LC/M1469248775LC.IMG"
+    nac2 = "data/PATCH-004/LRO NAC/OHRC/M1127547939RC.IMG"
+    iirs = (f"{P001}/IIRS/ch2_iir_nri_20211221T0324126144_d_img_hw1/data/raw/"
+            "20211221/ch2_iir_nri_20211221T0324126144_d_img_hw1.qub")
+    iirs_g = (f"{P001}/IIRS/ch2_iir_nri_20211221T0324126144_d_img_hw1/data/raw/"
+              "20211221/ch2_iir_nri_20211221T0324126144_d_img_hw1.hdr")
+    tmc = "data/processed/tmc/ch2_tmc_nca_20260607T2319176707_d_img_d18.img"
+    tmc_g = "data/processed/tmc/ch2_tmc_nca_20260607T2319176707_g_grd_d18.csv"
+    oh26 = ("data/PATCH-004/OHRC/data/calibrated/20260331/"
+            "ch2_ohr_ncp_20260331T1105235288_d_img_d18.img")
+    oh26_g = ("data/PATCH-004/OHRC/geometry/calibrated/20260331/"
+              "ch2_ohr_ncp_20260331T1105235288_g_grd_d18.csv")
+    return {
+        "OHRC 2021 ↔ LRO NAC (content match)": {
+            "src_img": ohrc, "src_geom": ohrc_g,
+            "ref_img": nac1, "ref_geom": "data/processed/nac_geom_M1127_full.csv",
+            "note": "Sub-pixel content match on real data (RMSE < 1 px)."},
+        "TMC 2026 ↔ LRO NAC (frame disagreement)": {
+            "src_img": tmc, "src_geom": tmc_g, "ref_img": nac2,
+            "ref_geom": "data/processed/nac_geom_M1127_full.csv",
+            "note": "Honest NO MATCH: ISRO CD grid vs NAC SPICE disagree ~10 km."},
+        "OHRC 2026 ↔ LRO NAC (frame disagreement)": {
+            "src_img": oh26, "src_geom": oh26_g, "ref_img": nac2,
+            "ref_geom": "data/processed/nac_geom_M1127_full.csv",
+            "note": "Independent OHRC over the same footprint: also no content lock."},
+        "IIRS 2021 ↔ LRO NAC (cross-sensor)": {
+            "src_img": iirs, "src_geom": iirs_g, "ref_img": nac2,
+            "ref_geom": "",
+            "note": "Infrared vs visible — honest NO MATCH across all bands."},
+    }
 
 
 def _execute(mode, normalize, equal_gsd, use_cached):
