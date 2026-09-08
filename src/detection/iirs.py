@@ -249,6 +249,13 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         "method": "cross_modal (geometry-dominant front-ends)",
         "ref_low_contrast": round(low_contrast_score(ohrc_ws), 3),
         "geometry_available": False,
+        "dimensions": {
+            "native_src": {"rows": int(iirs_bands.shape[1]),
+                           "cols": int(iirs_bands.shape[2])},
+            "native_ref": {"rows": int(rows), "cols": int(cols)},
+            "workspace": {"rows": 256, "cols": 256},
+            "gsd_m": None,
+        },
         "artifacts": {
             "original_src": prev_src,
             "original_ref": prev_ref,

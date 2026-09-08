@@ -142,3 +142,23 @@ Root causes found and fixed:
   ~45-46k red marker pixels per Before, montage 1024x462 with 75k red px; suite
   65 passed; AppTest renders montage branch (else-branch marker absent) with no
   exceptions. register test now asserts all six evidence artifacts exist.
+
+## Guided, verifiable results view (v4 — "confusing, users can't verify")
+
+Reordered the sensor results page into a narrative a first-time user can follow:
+1. Verdict banner
+2. 'What the pipeline did' — numbered plain-language steps matched to the actual
+   verdict (content-registered vs geometry-registered vs not_registered), with
+   the key numbers inline (RMSE, inliers, GSD).
+3. Before (red-boxed overlap swath) -> After montage (After|After|Difference).
+4. 'Before vs after — by the numbers' table: native strip sizes, the exact
+   red-box swath in native pixels, and the common-grid size + GSD.
+5. 'How to check it''s correct' — a short per-verdict check script (eyeball the
+   After panels at equal zoom; check RMSE under 1 px; or for geometry pairs why
+   no RMSE exists).
+Evidence trace + technical notes collapse into expanders.
+The stage now records dimensions in the report
+(native_src/native_ref, swath_src/swath_ref, grid_along/across, gsd_m) — IIRS
+too. Real TMC/OHRC-2026: TMC 551,946x4,000 px, OHRC 93,692x12,000 px, TMC swath
+rows 63,406-68,557 x cols 3,590-4,113, common grid 1,024x154 @ 21.70 m/px.
+Suite 65 passed; AppTest renders all four sections.

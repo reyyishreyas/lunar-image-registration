@@ -256,7 +256,11 @@ def _render_before_after(rep, src_name="Source", ref_name="Reference"):
 
 
 def _render_sensor(res):
-    """Reader-friendly report of a multi-sensor (TMC / IIRS vs OHRC) run."""
+    """Reader-friendly report of a multi-sensor (TMC / IIRS vs OHRC) run.
+
+    Ordered so a first-time user can answer three questions without reading the
+    code: (1) what did the pipeline do, (2) see the Before -> After evidence,
+    (3) what should I check to trust it."""
     rep = res.get("report", {})
     sensor = res.get("sensor", "tmc-ohrc")
     src_name, ref_name = _sensor_labels(sensor)
@@ -264,26 +268,71 @@ def _render_sensor(res):
     icon, headline, kind = _friendly_status(verdict)
     getattr(st, kind)(f"{icon} **{headline}**")
 
+    st.markdown("#### What the pipeline did")
     if verdict == "registered":
-        st.write("The two images show the same ground features strongly enough "
-                 "that the pipeline matched them directly (cross-modal, "
-                 f"method **{rep.get('method')}**).")
+        st.markdown(
+            f"1. Read the raw **{src_name}** and **{ref_name}** strips.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "2. Matched the ground features both strips share (cross-modal "
+            f"matching, method **{rep.get('method')}**) — "
+            f"**{rep.get('inliers')}** after outlier rejection.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "3. Fit the geometric transformation between them. Residual "
+            f"RMSE ≈ **{float(rep.get('rmse_px')):.3f} px** "
+            "(≈1 px or less = sub-pixel: the two images agree to well under a "
+            "pixel after alignment).",
+            unsafe_allow_html=True)
+        st.markdown(
+            "4. Re-sampled both onto one shared ground grid so they can be "
+            "compared directly. That is the **After** view below.",
+            unsafe_allow_html=True)
     elif verdict == "geometry_registered":
-        st.write("The scene is a dark or low-sun region, so automatic feature "
-                 "matching cannot be trusted. Instead the pipeline placed both "
-                 "images on the same geographic grid from the spacecraft "
-                 "geometry (ground sample distance "
-                 f"**{rep.get('gsd_m', 0):.2f} m/px**) and stacked them there. "
-                 "They are registered in space even though the images look "
-                 "different.")
+        gsd = rep.get("gsd_m")
+        gsd_txt = f"**{float(gsd):.2f} m/px**" if isinstance(gsd, (int, float)) else "one shared scale"
+        st.markdown(
+            f"1. Read the raw **{src_name}** and **{ref_name}** strips and "
+            "checked their on-ground footprints overlap.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "2. The reference strip turned out to be very dark / low-sun "
+            "(mean ~ "
+            f"{(rep.get('diagnostics') or {}).get('ref_mean', '?')} "
+            "of 255), so there are **no trustworthy craters or features to "
+            "match** — the pipeline does not invent matches on dark data.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "3. Instead it registered using the **ISRO spacecraft geometry**: "
+            "both strips were placed on the same ground grid, equalised to "
+            f"{gsd_txt} ground-sample distance.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "4. Outcome: both images are aligned **in ground space** even "
+            "though they look different. This is why the 'After/registered' "
+            "view exists — see it below.",
+            unsafe_allow_html=True)
     elif verdict == "not_registered":
-        st.warning("The two products could not be registered: no verified "
-                   "content matches and no usable ground geometry. The "
-                   "pipeline reports this honestly rather than returning a "
-                   "guessed alignment.")
+        st.markdown(
+            f"1. Read the raw **{src_name}** and **{ref_name}** strips.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "2. Tried to match shared ground features — **no verified matches** "
+            "survived outlier rejection.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "3. Tried the spacecraft-geometry route — **no usable ground "
+            "geometry** (this instrument ships none).",
+            unsafe_allow_html=True)
+        st.markdown(
+            "4. The pipeline therefore refuses to guess. It reports "
+            "**not_registered** honestly instead of presenting a fabricated "
+            "alignment.",
+            unsafe_allow_html=True)
 
-    with st.expander("How this pair was registered (evidence)", expanded=True):
-        _render_pipeline_trace(rep, sensor)
+    _render_before_after(rep, src_name, ref_name)
+    _render_what_changed(rep, src_name, ref_name)
+    _render_check_it(rep, src_name, ref_name)
 
     georef = rep.get("georef") or {}
     if georef:
@@ -295,18 +344,110 @@ def _render_sensor(res):
             f"{r.get('lon', ['', ''])[0]:.3f}–{r.get('lon', ['', ''])[1]:.3f}°, "
             f"lat {r.get('lat', ['', ''])[0]:.3f}–{r.get('lat', ['', ''])[1]:.3f}°"
             f" · overlap: {'yes' if georef.get('overlap') else 'no'}")
-    _render_before_after(rep, src_name, ref_name)
     dg = rep.get("diagnostics") or {}
     if dg:
         st.caption(
             "Image quality — source mean "
             f"{dg.get('src_mean', 0):.0f}/255, reference mean "
             f"{dg.get('ref_mean', 0):.0f}/255 (low values = dark/low-sun).")
+    with st.expander("Evidence — full pipeline trace", expanded=False):
+        _render_pipeline_trace(rep, sensor)
     notes = rep.get("notes") or []
     if notes:
         with st.expander("Technical notes"):
             for n in notes:
                 st.markdown(f"- {n}")
+
+
+def _fmt_px(d, key_rows="rows", key_cols="cols"):
+    if not d:
+        return "—"
+    r, c = d.get(key_rows), d.get(key_cols)
+    if not isinstance(r, (int, float)) or not isinstance(c, (int, float)):
+        return "—"
+    return f"{int(r):,} × {int(c):,} px"
+
+
+def _render_what_changed(rep, src_name, ref_name):
+    """Explicit 'before vs after' sizes so users can see exactly what changed."""
+    d = rep.get("dimensions") or {}
+    if not d or not d.get("native_src"):
+        return
+    ss, sr = d.get("swath_src") or {}, d.get("swath_ref") or {}
+    gsd = d.get("gsd_m", rep.get("gsd_m"))
+    gsd_txt = f" @ {float(gsd):.2f} m/px" if isinstance(gsd, (int, float)) else ""
+    grid = (f"{d.get('grid_along', '?')} × {d.get('grid_across', '?')} px"
+            + gsd_txt)
+
+    def swath(s):
+        if not s:
+            return "—"
+        return (f"rows {s.get('row_min', '?')}–{s.get('row_max', '?')} × "
+                f"cols {s.get('col_min', '?')}–{s.get('col_max', '?')} (native)")
+
+    st.markdown("#### Before vs after — by the numbers")
+    st.markdown(
+        "| | **Before** (raw strip) | **After** (common ground grid) |\n"
+        f"|---|---|---|\n"
+        f"| **{src_name}** | {_fmt_px(d.get('native_src'))} "
+        f"(red-box swath: {swath(ss)}) | {grid} |\n"
+        f"| **{ref_name}** | {_fmt_px(d.get('native_ref'))} "
+        f"(red-box swath: {swath(sr)}) | {grid} |\n"
+        f"| Why it changes | each strip is a different sensor swath (different "
+        f"rows/cols, different footprint, native pixel scale) → you cannot "
+        f"compare them directly | both re-sampled to the same region, same "
+        f"grid, same ground scale → directly comparable |\n")
+    st.caption("The **red box** on each Before panel is the *overlap swath* — "
+               "the only part of each raw strip that actually covers the shared "
+               "ground region. Everything outside it is dimmed because it is "
+               "not part of the comparison.")
+
+
+def _render_check_it(rep, src_name, ref_name):
+    """What 'good' looks like for this verdict — a short check script."""
+    verdict = rep.get("verdict")
+    st.markdown("#### How to check it's correct")
+    if verdict == "registered":
+        rmse = rep.get("rmse_px")
+        st.markdown(
+            f"- **Look at the After panels at the same zoom** — every crater / "
+            f"ridge you see in the {src_name} panel should sit at the matching "
+            f"spot in the {ref_name} panel.",
+            unsafe_allow_html=True)
+        st.markdown(
+            f"- **Check the accuracy number** — RMSE ≈ "
+            f"{float(rmse):.3f} px across {rep.get('inliers')} matched "
+            f"features. Under 1 px means sub-pixel agreement.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "- **Difference panel** (right of the montage) shows mostly dark "
+            "with warm speckles only on genuine illumination/feature "
+            "differences — not broad shifts.",
+            unsafe_allow_html=True)
+    elif verdict == "geometry_registered":
+        st.markdown(
+            f"- **Same ground region** — confirm the {src_name} and {ref_name} "
+            "footprints overlap (lon/lat line above).",
+            unsafe_allow_html=True)
+        st.markdown(
+            "- **Same ground scale** — both After panels have the same GSD, so "
+            "a fixed screen distance equals the same ground distance in both.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "- **Why no RMSE here** — the reference is so dark/low-sun that "
+            "there are no trustworthy features to measure accuracy against. "
+            "Reporting an RMSE would mean inventing matches on black data.",
+            unsafe_allow_html=True)
+    elif verdict == "not_registered":
+        st.markdown(
+            "- **This is the honest answer** — neither content matching nor "
+            "geometry could place the pair on a common grid, so nothing is "
+            "presented as aligned.",
+            unsafe_allow_html=True)
+        st.markdown(
+            "- To register this pair you would need a brighter acquisition or "
+            "a geometry file for the instrument.",
+            unsafe_allow_html=True)
 
 
 def _sensor_labels(sensor):

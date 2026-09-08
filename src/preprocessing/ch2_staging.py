@@ -252,6 +252,12 @@ def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
 
     s_ll = read_ch2_raw(src_img, src_geom, width=src_width, memmap=True)
     r_ll = read_ch2_raw(ref_img, ref_geom, width=ref_width, memmap=True)
+    finite_s = np.isfinite(s_scan) & np.isfinite(s_pix)
+    finite_r = np.isfinite(r_scan) & np.isfinite(r_pix)
+    swath_s = {"row_min": int(s_scan[finite_s].min()), "row_max": int(s_scan[finite_s].max()),
+               "col_min": int(s_pix[finite_s].min()), "col_max": int(s_pix[finite_s].max())}
+    swath_r = {"row_min": int(r_scan[finite_r].min()), "row_max": int(r_scan[finite_r].max()),
+               "col_min": int(r_pix[finite_r].min()), "col_max": int(r_pix[finite_r].max())}
 
     def sample(ll, scan, pix):
         ok = np.isfinite(scan) & np.isfinite(pix)
@@ -269,6 +275,9 @@ def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
         "gsd_m": float(gsd), "lon0": lon0, "lon1": lon1,
         "lat0": lat0, "lat1": lat1, "n_along": n_along,
         "n_across": n_across,
+        "native_src": {"rows": int(s_ll.shape[0]), "cols": int(s_ll.shape[1])},
+        "native_ref": {"rows": int(r_ll.shape[0]), "cols": int(r_ll.shape[1])},
+        "swath_src": swath_s, "swath_ref": swath_r,
         "note": f"ground staged at {gsd:.2f} m/px over "
                 f"[{lon0:.4f},{lon1:.4f}]x[{lat0:.4f},{lat1:.4f}]",
     }
@@ -364,6 +373,12 @@ def register_ch2_pair(src_img, src_geom, ref_img, ref_geom, *, out_dir,
         _dump(report, out_dir, prefix)
         return report
     report["gsd_m"] = st["gsd_m"]
+    report["dimensions"] = {
+        "native_src": st["native_src"], "native_ref": st["native_ref"],
+        "swath_src": st["swath_src"], "swath_ref": st["swath_ref"],
+        "grid_along": st["n_along"], "grid_across": st["n_across"],
+        "gsd_m": st["gsd_m"],
+    }
     src, ref = st["src"], st["ref"]
     src_e, ref_e = enhance_dark(src), enhance_dark(ref)
     report["diagnostics"] = {
