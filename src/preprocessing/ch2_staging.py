@@ -146,21 +146,31 @@ def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600):
 
 
 def _draw_highlight_box(gray, box):
-    """Red rectangle around the extracted overlap window (before annotations)."""
+    """Red rectangle around the extracted overlap window; context outside the
+    box is dimmed so the change is obvious even after UI downscaling."""
     bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     if box:
         x0, y0, x1, y1 = box
-        t = max(2, int(min(bgr.shape[:2]) / 150))
+        h, w = bgr.shape[:2]
+        inside = np.zeros((h, w), bool)
+        inside[max(0, y0):min(h, y1 + 1), max(0, x0):min(w, x1 + 1)] = True
+        dimmed = bgr[~inside]
+        bgr[~inside] = (dimmed * 0.45).astype(np.uint8)
+        t = max(4, int(min(h, w) / 60))
         cv2.rectangle(bgr, (x0, y0), (x1, y1), RECT_COLOR, t)
     return bgr
 
 
 def _outline_registered(gray):
-    """Thin red outline around a registered product (after annotations)."""
+    """Thick red outline plus a faint inner glow around a registered product."""
     bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     h, w = bgr.shape[:2]
-    t = max(2, int(min(h, w) / 150))
+    t = max(4, int(min(h, w) / 60))
     cv2.rectangle(bgr, (0, 0), (w - 1, h - 1), RECT_COLOR, t)
+    glow_t = max(1, t // 3)
+    cv2.rectangle(bgr, (t + glow_t, t + glow_t),
+                  (w - 1 - t - glow_t, h - 1 - t - glow_t),
+                  RECT_COLOR, glow_t)
     return bgr
 
 
