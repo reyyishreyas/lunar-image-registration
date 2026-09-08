@@ -29,6 +29,7 @@ import cv2
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
+from scipy.spatial import cKDTree
 
 from src.preprocessing.tmc import (
     read_ch2_raw,
@@ -97,15 +98,91 @@ def overlap_box(gridA_lon, gridA_lat, gridB_lon, gridB_lat):
     return (lon0, lon1, lat0, lat1)
 
 
-def _inverse_maps(pix_axis, scan_axis, lon_grid, lat_grid):
-    """Return (lat->scan, lon->pixel) monotonic inverse interpolators."""
-    lat_scan = np.median(lat_grid, axis=1)      # lat as function of scan index
-    lon_pix = np.median(lon_grid, axis=0)       # lon as function of pixel index
-    f_scan = RegularGridInterpolator((lat_scan,), scan_axis.astype(float),
-                                     bounds_error=False, fill_value=None)
-    f_pix = RegularGridInterpolator((lon_pix,), pix_axis.astype(float),
-                                    bounds_error=False, fill_value=None)
-    return f_scan, f_pix
+class GroundGridInverse:
+    """2-D (lon, lat) -> (scan, pixel) inverse for an ISRO-style grid.
+
+    A separable 1-D model (two independent monotonic maps lat->scan,
+    lon->pixel, previously ``_inverse_maps``) is exact only when the ground
+    grid is a rectangle. Chandrayaan strips sweep (lat is not a function of
+    scan alone), so the separable model can be off by thousands of native
+    pixels — the TMC-2026 -> NAC content failure. This class instead seeds
+    each query with a nearest-grid-point and refines with a full 2x2
+    Gauss-Newton step, exactly like ``NacInverse`` but for ISRO (scan, pixel)
+    grids.
+    """
+
+    def __init__(self, pix_axis, scan_axis, lon_grid, lat_grid):
+        self._scan_ax = np.asarray(scan_axis, np.float64)
+        self._pix_ax = np.asarray(pix_axis, np.float64)
+        self.lon_f = RegularGridInterpolator(
+            (self._scan_ax, self._pix_ax), lon_grid,
+            method="linear", bounds_error=False, fill_value=np.nan)
+        self.lat_f = RegularGridInterpolator(
+            (self._scan_ax, self._pix_ax), lat_grid,
+            method="linear", bounds_error=False, fill_value=np.nan)
+        SL, SP = np.meshgrid(self._scan_ax, self._pix_ax, indexing="ij")
+        self._lonref = float(np.nanmedian(lon_grid))
+        rel_lon = (lon_grid - self._lonref + 180.0) % 360.0 - 180.0
+        self._tree_pts = np.column_stack([rel_lon.ravel(), lat_grid.ravel()])
+        self._seed_scan = SL.ravel()
+        self._seed_pix = SP.ravel()
+
+    def forward(self, scan, pixel):
+        """(scan, pixel) -> (lon [roughly near _lonref], lat)."""
+        q = np.column_stack([np.asarray(scan).ravel(), np.asarray(pixel).ravel()])
+        lo = np.asarray(self.lon_f(q), np.float64).ravel()
+        la = np.asarray(self.lat_f(q), np.float64).ravel()
+        lo = (lo - self._lonref + 180.0) % 360.0 - 180.0 + self._lonref
+        if np.ndim(scan) == 0:
+            return float(lo[0]), float(la[0])
+        return lo.reshape(np.shape(scan)), la.reshape(np.shape(scan))
+
+    def apply(self, lon, lat):
+        """(lon, lat) -> (scan, pixel) arrays (same shape as inputs).
+
+        For each query a nearest-grid-point seed is refined with a full 2x2
+        Gauss-Newton step. Swept (folded) strips contain regions where the
+        forward map is locally non-invertible and the Newton iterate can
+        diverge; in that case the iterate with the lowest residual — or the
+        seed itself — is returned so the output is always a finite,
+        best-available prediction.
+        """
+        lon = np.asarray(lon, np.float64)
+        lat = np.asarray(lat, np.float64)
+        rel = (lon - self._lonref + 180.0) % 360.0 - 180.0
+        d, idx = cKDTree(self._tree_pts).query(
+            np.column_stack([rel.ravel(), lat.ravel()]))
+        scan = self._seed_scan[idx].reshape(lon.shape).astype(np.float64)
+        pix = self._seed_pix[idx].reshape(lon.shape).astype(np.float64)
+        best_s, best_p = scan.copy(), pix.copy()
+        best_res = np.full(scan.shape, np.inf)
+        lo_v, la_v = self.forward(scan, pix)
+        for _ in range(12):
+            fin = np.isfinite(lo_v) & np.isfinite(la_v)
+            rl = (lo_v - self._lonref + 180.0) % 360.0 - 180.0
+            res = (np.abs(rl - rel) + np.abs(la_v - lat))
+            take = fin & (res < best_res)
+            best_s[take] = scan[take]
+            best_p[take] = pix[take]
+            best_res[take] = res[take]
+            e = 1e-3
+            loE, laE = self.forward(scan + e, pix)
+            loT, laT = self.forward(scan, pix + e)
+            J00 = (loE - lo_v) / e
+            J01 = (loT - lo_v) / e
+            J10 = (laE - la_v) / e
+            J11 = (laT - la_v) / e
+            det = J00 * J11 - J01 * J10
+            dlon = rel - rl
+            dlat = lat - la_v
+            nxt_s = scan + (J11 * dlon - J01 * dlat) / det
+            nxt_p = pix + (-J10 * dlon + J00 * dlat) / det
+            bad = ~np.isfinite(det) | (np.abs(det) < 1e-15)
+            nxt_s = np.where(bad, scan, nxt_s)
+            nxt_p = np.where(bad, pix, nxt_p)
+            scan, pix = nxt_s, nxt_p
+            lo_v, la_v = self.forward(scan, pix)
+        return best_s, best_p
 
 
 def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600,
@@ -200,13 +277,11 @@ def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
     lons = np.linspace(lon0, lon1, n_across)
     LAT, LON = np.meshgrid(lats, lons, indexing="ij")
 
-    s_map_scan, s_map_pix = _inverse_maps(spix, sscan, slon, slat)
-    r_map_scan, r_map_pix = _inverse_maps(rpix, rscan, rlon, rlat)
+    s_inv = GroundGridInverse(spix, sscan, slon, slat)
+    r_inv = GroundGridInverse(rpix, rscan, rlon, rlat)
 
-    s_scan = s_map_scan(LAT.ravel()[:, None]).ravel()
-    s_pix = s_map_pix(LON.ravel()[:, None]).ravel()
-    r_scan = r_map_scan(LAT.ravel()[:, None]).ravel()
-    r_pix = r_map_pix(LON.ravel()[:, None]).ravel()
+    s_scan, s_pix = s_inv.apply(LON.ravel(), LAT.ravel())
+    r_scan, r_pix = r_inv.apply(LON.ravel(), LAT.ravel())
 
     s_ll = read_ch2_raw(src_img, src_geom, width=src_width, memmap=True)
     r_ll = read_ch2_raw(ref_img, ref_geom, width=ref_width, memmap=True)
@@ -364,9 +439,8 @@ def stage_ch2_nac_pair(src_img, src_geom, nac_img, nac_geom_csv, *,
     lons = np.linspace(lon0, lon1, n_across)
     LAT, LON = np.meshgrid(lats, lons, indexing="ij")
 
-    s_map_scan, s_map_pix = _inverse_maps(spix, sscan, slon, slat)
-    src_scan = s_map_scan(LAT.ravel()[:, None]).ravel()
-    src_pix = s_map_pix(LON.ravel()[:, None]).ravel()
+    s_inv = GroundGridInverse(spix, sscan, slon, slat)
+    src_scan, src_pix = s_inv.apply(LON.ravel(), LAT.ravel())
     inv = NacInverse(lon, lat, line, samp)
     nac_col, nac_row = inv.apply(LON.ravel(), LAT.ravel())
     nac_col = nac_col.reshape(LAT.shape); nac_row = nac_row.reshape(LAT.shape)
@@ -496,10 +570,19 @@ def register_ch2_to_nac(src_img, src_geom, nac_img, nac_geom_csv, *, out_dir,
     }
     src, ref = st["src"], st["ref"]
     src_e, ref_e = enhance_dark(src), enhance_dark(ref)
+    union = (src_e > 0) & (ref_e > 0)
+    if union.sum() > 100:
+        a = src_e[union].astype(np.float64)
+        b = ref_e[union].astype(np.float64)
+        overlap_ncc = {"overlap_ncc": float(np.corrcoef(a, b)[0, 1]),
+                       "overlap_px": int(union.sum())}
+    else:
+        overlap_ncc = {"overlap_ncc": None, "overlap_px": int(union.sum())}
     report["diagnostics"] = {
         "src_low_contrast": round(low_contrast_score(src), 3),
         "ref_low_contrast": round(low_contrast_score(ref), 3),
         "src_mean": float(src.mean()), "ref_mean": float(ref.mean()),
+        **overlap_ncc,
     }
     for k in ("src", "ref", "original_src", "original_ref",
               "after_src", "after_ref", "change_map", "montage"):
@@ -531,9 +614,8 @@ def register_ch2_to_nac(src_img, src_geom, nac_img, nac_geom_csv, *, out_dir,
             method="geometry",
             verdict="geometry_registered",
             notes=report["notes"]
-            + ["content correspondence NOT verifiable (dark/low-sun/polar or "
-               "featureless); registered by ISRO CSV + LRO NAC SPICE on a "
-               "common ground grid"],
+            + ["content correspondence NOT verifiable; registered by ISRO CSV "
+               "+ LRO NAC SPICE on a common ground grid"],
         )
     if verbose:
         print(f"[register_ch2_to_nac] verdict={report['verdict']} "
