@@ -18,37 +18,49 @@ gaps these sensors present, **without disturbing the working Phase 8 code**
 | `src/preprocessing/tmc.py` | CH2 raw reader (width auto-inferred, memmap), geometry grid, GSD, `register_tmc_to_ohrc` |
 | `src/detection/iirs.py` | ENVI BSQ band-selective reader, representative band selection, `register_iirs_to_ohrc` |
 | `src/auto_pipeline.py` | `run_sensor_auto` dispatch (`ohrc-nac`/`tmc-ohrc`/`iirs-ohrc`) |
+
+### Follow-up fix (9.6–9.8): dark/polar handling
+- `src/preprocessing/ch2_staging.py` (new): ground-grid equal-GSD stager for two
+  CH2 geometry CSVs + layered `register_ch2_pair` decision
+  (enhance → content → geometry → not_registered) + `low_contrast_score`.
+- `tests/test_ch2_staging.py` (new, 9 tests).
+- `src/detection/iirs.py`: enhancement + low-contrast diagnostics + honest
+  no-geometry note on every band.
+- `src/auto_pipeline.py` / `scripts/run_auto.py`: TMC path now uses the robust
+  layered `register_ch2_pair`; `summarize` handles `gsd_m`/`staged_gsd_m`.
 | `scripts/run_auto.py` | `--sensor` flag |
 | `tests/test_cross_modal.py`, `tests/test_tmc.py`, `tests/test_iirs.py` | 21 new unit tests |
 
 ## Numbers Produced
-- Full test suite: **55 passed** (34 prior + 21 new).
+- Full test suite: **64 passed** (34 prior + 21 + 9 dark/polar).
 - TMC width inference: 4000 px (real product, 551946 × 4000, 2.2 GB).
-- OHRC width inference preserved: 12000 px.
-- TMC GSD: 21.70 m/px (stride-aware; fixes earlier 6×/missed-stride bug).
-- Real TMC swath self-registration: front=clahe, inliers=1314, ratio=0.996, RMSE=0.253 px, recovered offset to 0.02 px.
-- Real IIRS-2024 header parsed: samples=250, lines=12620, bands=256, int16, BSQ.
-- Real IIRS band 116 read (band-selective, near-instant); self-registration: front=clahe, inliers=794, ratio=0.994, RMSE=0.252 px, recovered offset to 0.03 px.
+- OHRC width inference preserved: 12000 px (both 2021 pair-1 and 2026 PATCH-004).
+- TMC GSD: 21.70 m/px (stride-aware); OHRC-2026 GSD 0.982 m/px, OHRC-2021 GSD 0.25 m/px.
+- Real TMC swath self-registration: front=clahe, inliers=1314, ratio=0.996, RMSE=0.253 px.
+- Real IIRS band 116 read (band-selective, near-instant); self-registration: front=clahe, inliers=794, ratio=0.994, RMSE=0.252 px.
+- Content path regression (bright pair): `register_ch2_pair` → `registered`, content:gradient_structure, 2170 inliers, RMSE 0.0 px.
+- **Real overlap found**: TMC-2026 NCA/NCF/NCN all overlap OHRC-2026 (lon 296.09–296.21, lat 7.32–8.16).
 
-## Cross-modal validation
-- Synthetic radiometric inversion: `best_front_name` = `gradient_structure`, ~467
-  inliers, RMSE 0.218 px, homography recovered within 0.01/1.0 px of truth.
+## Dark / polar (low-sun) handling
+- **OHRC-2026 is globally dark**: mean ~4–8/255, max ~28–205, p98~19 across all rows → a genuine low-sun hard case. After percentile-stretch + CLAHE, SIFT still finds 0 matches vs TMC (no recoverable structure) → content registration is mathematically infeasible on this data.
+- **Proper pipeline** (`register_ch2_pair` layered decision): enhance → content → if content fails AND footprints overlap → **geometry registration on a common ground grid**; if no overlap → honest `not_registered`. Never fabricates a model.
+- **TMC↔OHRC-2026 result**: `GEOMETRY REGISTERED (no content): GSD=21.70 m, method=geometry`, aligned src/ref ground crops written, exit 0. UI/CLI report notes "content correspondence NOT verifiable (dark/low-sun/polar or featureless)".
+- **IIRS**: no ISRO geometry CSV / ENVI map-info → geometry registration impossible; content-only per-band with enhancement + low-contrast diagnostics + explicit no-geometry note. IIRS-2021↔OHRC-2021 real attempt → honest `not_registered` (no fabricated model).
 
 ## Blocked / Not fully verified
-- **Content TMC↔OHRC and IIRS↔OHRC registration on overlapping acquisitions:**
-  the available TMC (2026-06-07, lon 294.7–296.8, lat −26.5 to 18.5) and IIRS
-  (2024-05-03) products do **not overlap** the OHRC pair-1 footprint (lon 336.5,
-  lat −3.4 to −2.6). A content run against that reference would legitimately fail
-  at ground level (no shared terrain), not from a coding defect. Verified the two
-  readers + the cross-modal chain on the real products via self-registration
-  instead; a true cross-sensor run requires an overlapping acquisition (new data).
+- **IIRS content cross-sensor registration**: IIRS is IR hyperspectral with no
+  ground geometry; only a hypothetical bright overlapping IIRS↔OHRC acquisition
+  could yield a content `registered`. Currently honest `not_registered`.
+- **Content TMC↔OHRC on this data**: not achievable for the OHRC-2026 pair
+  (globally dark); handled via geometry fallback instead (verified on real data).
 
 ## Testing / Functional verification
-- `venv/bin/python -m pytest tests/ -q` → 55 passed.
+- `venv/bin/python -m pytest tests/ -q` → **64 passed**.
 - Real TMC: memmap reader shape (551946, 4000); swath read in 0.15 s; cross-modal self-register OK.
 - Real IIRS: header parse + band-116 read; cross-modal self-register OK.
-- CLI: `scripts/run_auto.py --help` shows all three `--sensor` choices; bogus
-  sensor → verdict `input_error`.
+- Real TMC↔OHRC-2026 (dark): `--sensor tmc-ohrc` → geometry_registered, GSD 21.70 m, exit 0.
+- Real IIRS-2021↔OHRC-2021: `register_iirs_to_ohrc` → honest not_registered with no-geometry note.
+- CLI: `scripts/run_auto.py --help` shows all three `--sensor` choices; bogus sensor → `input_error`.
 
 ## Git
 - Branch: `phase-9-cross-modal-tmc-iirs`

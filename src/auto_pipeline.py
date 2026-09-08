@@ -374,11 +374,10 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
 
     try:
         if sensor_pair == "tmc-ohrc":
-            from src.preprocessing.tmc import register_tmc_to_ohrc
-            report = register_tmc_to_ohrc(
+            from src.preprocessing.ch2_staging import register_ch2_pair
+            report = register_ch2_pair(
                 join(src_img), join(src_geom), join(ref_img), join(ref_geom),
-                out_dir=join(out_dir), prefix=prefix, crop_rows=crop_rows,
-                swath_pix=swath_pix,
+                out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
             )
         else:  # iirs-ohrc
             from src.detection.iirs import register_iirs_to_ohrc
@@ -419,8 +418,10 @@ def summarize(report):
                 "{rmse_self_px} px, {inliers} inliers / {inlier_ratio} ratio, "
                 "{n_matches} matches").format(**report)
     if v == "geometry_registered":
-        return ("GEOMETRY REGISTERED (no content): GSD={staged_gsd_m} m, "
-                "method=SPICE+ISRO").format(**report)
+        gsd = report.get("staged_gsd_m") or report.get("gsd_m")
+        method = report.get("method")
+        return (f"GEOMETRY REGISTERED (no content): GSD={gsd} m, "
+                f"method={method}")
     if v == "no_content_correspondence":
         return "NO CONTENT CORRESPONDENCE — trying geometry registration"
     return f"REGISTRATION NOT COMPLETED — verdict={v} ({len(report.get('notes', []))} notes)"

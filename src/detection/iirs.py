@@ -165,25 +165,29 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     iirs_bands = r["data"]  # (len(bands), lines, samples)
     meta = r["meta"]
 
-    # OHRC reference: read the whole strip as uint8 (2-D) via the CH2 reader
+    # OHRC reference: read the whole strip as uint8 (2-D) via the CH2 reader,
+    # then lift contrast (IIRS IR vs visible OHRC differ radiometrically and the
+    # OHRC may be a dark/polar hard case).
+    from src.preprocessing.ch2_staging import enhance_dark, low_contrast_score
     ohrc = read_ch2_raw(ohrc_img, ohrc_geom, width=OHRC_WIDTH)
-    # representational OHRC crop: middle scan band, full width, downsampled
     rows, cols = ohrc.shape
     mid = rows // 2
     slice_rows = min(1024, rows)
     ohrc_crop = ohrc[mid - slice_rows // 2: mid + slice_rows // 2, :]
     ohrc_ws = cv2.resize(ohrc_crop, (256, 256), interpolation=cv2.INTER_AREA)
+    ohrc_ref = enhance_dark(ohrc_ws)
 
     per_band = []
     best = None
     for i, b in enumerate(bands):
         band_2d = iirs_bands[i] if iirs_bands.ndim == 3 else iirs_bands[0]
         u = as_u8(band_2d)
-        # downsample IIRS band to 256 width (250 samples -> 256 canvas)
         u_ws = cv2.resize(u, (256, 256), interpolation=cv2.INTER_AREA)
-        res = cross_modal_register(u_ws, ohrc_ws, min_inliers=min_inliers,
+        u_ref = enhance_dark(u_ws)
+        res = cross_modal_register(u_ref, ohrc_ref, min_inliers=min_inliers,
                                    min_ratio=min_ratio, verbose=False, **match_kw)
-        rec = {"band": int(b), "ok": res is not None}
+        rec = {"band": int(b), "ok": res is not None,
+               "low_contrast": round(low_contrast_score(u_ws), 3)}
         if res:
             rec.update(inliers=res["inliers"], inlier_ratio=res["inlier_ratio"],
                        front=res["front"], rmse=res.get("rmse"))
@@ -201,6 +205,15 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
         "bands_used": [int(b) for b in bands],
         "per_band": per_band,
         "method": "cross_modal (geometry-dominant front-ends)",
+        "ref_low_contrast": round(low_contrast_score(ohrc_ws), 3),
+        "geometry_available": False,
+        "notes": [
+            "IIRS products carry no ISRO geometry CSV / ENVI map-info: ground-grid "
+            "(geometry) registration is not possible for IIRS. Registration is "
+            "content-based only; if content matching fails on a dark/polar/IR-vs-"
+            "visible pair the verdict is an honest not_registered (never a "
+            "fabricated model). Contrast enhancement is applied before matching."
+        ],
     }
     if best:
         report.update(best_inliers=best.get("inliers"),
