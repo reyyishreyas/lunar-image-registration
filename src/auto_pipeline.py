@@ -267,6 +267,18 @@ def run_auto(ohrc_img, ohrc_geom, nac_img, *, out_dir="data/processed/auto",
     # ---- 3. artifacts: overlay + match figure ----
     report["artifacts"] = _write_artifacts(report, src, ref, kp1, kp2, pts1,
                                            pts2, join, out_dir, prefix)
+    try:
+        p1i, p2i = pts1[keep], pts2[keep]
+        csv_path = os.path.join(out_dir, f"{prefix}_inliers.csv")
+        with open(csv_path, "w", newline="") as fh:
+            fh.write("src_x,src_y,ref_x,ref_y\n")
+            for (x1, y1), (x2, y2) in zip(p1i, p2i):
+                fh.write(f"{float(x1):.4f},{float(y1):.4f},"
+                         f"{float(x2):.4f},{float(y2):.4f}\n")
+        report["artifacts"]["correspondences"] = csv_path
+        report["inlier_points_saved"] = int(len(p1i))
+    except Exception as exc:  # noqa: BLE001
+        report["notes"].append(f"correspondence save failed: {exc}")
     return report
 
 

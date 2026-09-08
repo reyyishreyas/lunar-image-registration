@@ -33,6 +33,8 @@ import numpy as np
 import streamlit as st
 import yaml
 
+from src.visuals import frame_img, diff_map
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -174,20 +176,50 @@ def _sensor_metric_cols(rep):
     return verdict
 
 
+def _framed(path_or_arr, tag="REGISTERED"):
+    """Red frame + tag around any image, wherever it appears in the app."""
+    img = cv2.imread(path_or_arr, cv2.IMREAD_UNCHANGED) \
+        if isinstance(path_or_arr, str) and os.path.exists(path_or_arr) \
+        else path_or_arr
+    if img is None:
+        return None
+    if img.ndim == 3 and img.shape[2] == 4:
+        img = img[:, :, :3]
+    return frame_img(img, tag=tag)
+
+
 def _render_ground_artifacts(rep, src_name="Source", ref_name="Reference"):
     arts = rep.get("artifacts") or {}
     a, b = st.columns(2)
     src, ref = arts.get("src"), arts.get("ref")
     if src and os.path.exists(os.path.join(ROOT, src)):
-        a.image(os.path.join(ROOT, src), caption=f"{src_name} (ground-ready)",
+        a.image(_framed(os.path.join(ROOT, src), "GEO-READY"),
+                caption=f"{src_name} — ground-ready (frame = delivered product)",
                 width="stretch")
     if ref and os.path.exists(os.path.join(ROOT, ref)):
-        b.image(os.path.join(ROOT, ref), caption=f"{ref_name} (ground-ready)",
+        b.image(_framed(os.path.join(ROOT, ref), "GEO-READY"),
+                caption=f"{ref_name} — ground-ready (frame = delivered product)",
                 width="stretch")
+    if src and ref and os.path.exists(os.path.join(ROOT, src)) \
+            and os.path.exists(os.path.join(ROOT, ref)):
+        sa = cv2.imread(os.path.join(ROOT, src), cv2.IMREAD_GRAYSCALE)
+        rb = cv2.imread(os.path.join(ROOT, ref), cv2.IMREAD_GRAYSCALE)
+        if sa is not None and rb is not None and sa.shape == rb.shape:
+            st.image(diff_map(sa, rb), width="stretch",
+                     caption="What changed, pixel by pixel — warm (yellow/red) "
+                             "= large difference at that pixel, dark/blue = "
+                             "already agreeing after registration.")
     m = arts.get("matches")
     if m and os.path.exists(os.path.join(ROOT, m)):
-        st.image(os.path.join(ROOT, m), caption="Verified content matches",
+        st.image(_framed(os.path.join(ROOT, m), "VERIFIED MATCHES"),
+                 caption="Verified match points (the red lines connect matched "
+                         "features; frame = this panel is part of the "
+                         "delivered product)",
                  width="stretch")
+    corr = arts.get("correspondences")
+    if corr and os.path.exists(os.path.join(ROOT, corr)):
+        st.caption(f"Corresponding match points saved: `{corr}` "
+                   f"({rep.get('inlier_points_saved', '?')} inlier pairs).")
 
 
 def _render_before_after(rep, src_name="Source", ref_name="Reference"):
@@ -655,12 +687,21 @@ def main():
 
     left, right = st.columns(2)
     if res.get("fig"):
-        left.image(res["fig"], caption="Inlier match overlay (pipeline output)",
+        left.image(_framed(res["fig"], "MATCHES"),
+                   caption="Inlier match points — crossed feature pairs the "
+                           "pipeline trusts (frame = delivered product).",
                    width="stretch")
     if res.get("checker"):
-        right.image(res["checker"], caption="Checkerboard blend of staged "
-                                            "(aligned) crops",
+        right.image(_framed(res["checker"], "ALIGNED"),
+                    caption="Checkerboard blend of the aligned crops — features "
+                            "run continuously across the tiles, which is what "
+                            "'aligned' looks like.",
                     width="stretch")
+    if res.get("diff") and os.path.exists(os.path.join(ROOT, res["diff"])):
+        st.image(os.path.join(ROOT, res["diff"]), width="stretch",
+                 caption="What changed, pixel by pixel — warm (yellow/red) = "
+                         "large difference at that pixel, dark/blue = already "
+                         "agreeing after registration.")
     gsd = res.get("gsd_m")
     if gsd:
         st.caption(f"Staged common GSD: {gsd} m/px")
@@ -757,9 +798,15 @@ def _render_phase5(res):
         f"**Verification:** {meta.get('verification', 'n/a')}")
 
     ic, ip = st.columns(2)
-    ic.image(meta.get("src_png"), caption="OHRC ortho (magma)", width=620)
-    ip.image(meta.get("ref_png"), caption="NAC ortho (magma)", width=620)
-    st.image(meta.get("overlay_png"), caption="50/50 overlay", width=1240)
+    ic.image(_framed(meta.get("src_png"), "OHRC ORTHO"),
+             caption="OHRC ortho — delivered registered product (frame = "
+                     "delivered)", width=620)
+    ip.image(_framed(meta.get("ref_png"), "NAC ORTHO"),
+             caption="NAC ortho — delivered registered product (frame = "
+                     "delivered)", width=620)
+    st.image(_framed(meta.get("overlay_png"), "50/50 OVERLAY"),
+             caption="50/50 overlay of the two ground grids (frame = "
+                     "delivered)", width=1240)
 
 
 def _execute_auto(normalize, equal_gsd):
@@ -824,10 +871,21 @@ def _render_auto(res):
                      "spacecraft geometry instead — they are registered in "
                      "space even though the images look different.")
         arts = rep.get("artifacts") or {}
+        tags = {"matches": "VERIFIED MATCHES",
+                "checkerboard": "CHECKERBOARD (ALIGNED)",
+                "overlay": "REGISTERED OVERLAY"}
+        caps = {"matches": "Verified match points — crossed feature pairs the "
+                           "pipeline trusts (frame = delivered product).",
+                "checkerboard": "Checkerboard blend of the aligned crops — "
+                                "features run continuously across the tiles, "
+                                "which is what 'aligned' looks like.",
+                "overlay": "Registered overlay on a common grid (frame = "
+                           "delivered registered product)."}
         for key in ("matches", "checkerboard", "overlay"):
             p = arts.get(key)
             if p and os.path.exists(os.path.join(ROOT, p)):
-                st.image(os.path.join(ROOT, p), caption=key, width=640)
+                st.image(_framed(os.path.join(ROOT, p), tags[key]),
+                         caption=caps[key], width="stretch")
         _render_ground_artifacts(rep)
         if rep.get("rmse_px") is not None and 0 < rep["rmse_px"] < 1.0:
             st.success(f"**Sub-pixel registration**: RMSE {rep['rmse_px']:.4f} px "
@@ -897,8 +955,12 @@ def _execute(mode, normalize, equal_gsd, use_cached):
             fig = os.path.join(ROOT, cfg["outputs"]["matches_figure"])
             checker = _checker_from_cfg(cfg)
             meta = _read_meta(cfg)
-            return _row_to_result(row, fig, checker, meta,
-                                  gt=cfg.get("ground_truth", ""))
+            out = _row_to_result(row, fig, checker, meta,
+                                 gt=cfg.get("ground_truth", ""))
+            out["diff"] = _diff_from_paths(
+                cfg["preprocessing"]["outputs"]["src"],
+                cfg["preprocessing"]["outputs"]["ref"])
+            return out
 
         if mode.startswith("Project pair-2"):
             cfg = build_pair_config(PAIR2, dict(normalize=normalize,
@@ -910,7 +972,11 @@ def _execute(mode, normalize, equal_gsd, use_cached):
                 if (isinstance(row.get("inliers"), int) and
                         row.get("inliers", 0) >= 20):
                     fig = os.path.join(ROOT, cfg["outputs"]["matches_figure"])
-                    return _row_to_result(row, fig, None, {})
+                    out = _row_to_result(row, fig, None, {})
+                    out["diff"] = _diff_from_paths(
+                        cfg["preprocessing"]["outputs"]["src"],
+                        cfg["preprocessing"]["outputs"]["ref"])
+                    return out
                 refusal = (f"content matching is inconclusive "
                            f"({row.get('inliers', 0)} inliers)")
             except RuntimeError as e:
@@ -945,7 +1011,9 @@ def _execute(mode, normalize, equal_gsd, use_cached):
                 check = checkerboard(a, b)
                 checker = os.path.join(UPLOAD_DIR, "upload_checkerboard.png")
                 cv2.imwrite(os.path.join(ROOT, checker), check)
-            return _row_to_result(row, figp, checker, {})
+            out = _row_to_result(row, figp, checker, {})
+            out["diff"] = _diff_from_paths(sp, rp, "upload_diff.png")
+            return out
     except Exception as e:  # noqa: BLE001 — demo surfaces any pipeline error
         return {"error": str(e), "notes": {}}
 
@@ -967,6 +1035,18 @@ def _row_to_result(row, fig, checker, meta, gt=""):
     if not (isinstance(out["rmse"], (int, float)) and out["rmse"] > 0):
         out["notes"] = {"rmse": "n/a (no ground truth for this input)"}
     return out
+
+
+def _diff_from_paths(sp, rp, name="pair_diff.png"):
+    """Save a 'what changed' |source − reference| map next to the staged crops."""
+    a = cv2.imread(os.path.join(ROOT, sp), cv2.IMREAD_GRAYSCALE)
+    b = cv2.imread(os.path.join(ROOT, rp), cv2.IMREAD_GRAYSCALE)
+    if a is None or b is None or a.shape != b.shape:
+        return None
+    p = os.path.join(os.path.dirname(os.path.join(ROOT, sp)), name)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    cv2.imwrite(p, diff_map(a, b))
+    return p
 
 
 def _read_meta(cfg):

@@ -162,3 +162,37 @@ The stage now records dimensions in the report
 too. Real TMC/OHRC-2026: TMC 551,946x4,000 px, OHRC 93,692x12,000 px, TMC swath
 rows 63,406-68,557 x cols 3,590-4,113, common grid 1,024x154 @ 21.70 m/px.
 Suite 65 passed; AppTest renders all four sections.
+
+## App-wide red/change-highlight frames (v5) + PS-26166 compliance
+
+Applied red-box / change-highlight markings to **every** image surface in the
+Streamlit app (not just the sensor panels), per the user directive.
+
+- New `src/visuals.py`: `RED`, `frame_img(tag)` (red outline + tag),
+  `highlight_box(box, tag)` (red box + dimmed context), `diff_map(a, b)`
+  (Turbo |src−ref| per-pixel difference). ch2_staging now delegates its
+  underline/outline drawing to these shared helpers (`RECT_COLOR` removed).
+- Inline pair-1 / pair-2 / upload results in `main()` now render a **framed**
+  matches figure (`MATCHES`), a **framed** checkerboard (`ALIGNED`) and a new
+  `what changed` difference map. `_execute` computes `diff` via `_diff_from_paths`
+  for all three inline branches (pair-1, pair-2 content, upload).
+- `_render_phase5` orthos + overlay framed with `OHRC ORTHO` / `NAC ORTHO` /
+  `50/50 OVERLAY` tags.
+- Auto mode (`_render_auto`) and ground artifacts (`_render_ground_artifacts`)
+  were already framed in the previous step (delivered-products framing).
+- New `tests/test_visuals.py` (5 tests): red border pixels present, box dims
+  interior vs context, identical frames -> near-dark diff, different frames ->
+  bright diff, shape-mismatch -> None. Suite **70 passed**.
+- AppTest: pair-1, TMC sensor, and auto modes all run with zero exceptions and
+  metrics rendered; pixel-level check confirms framed fig/checker + 3-channel
+  diff file all present on disk.
+
+### PS-26166 compliance mapping
+
+`results/logs/ps26166_compliance.md` maps every requirement (multi-modal
+OHRC/TMC/IIRS, sun-angle invariance, scale invariance, sub-pixel accuracy,
+uniform match distribution, registered product, corresponding match points,
+evaluation metrics) to implementation + evidence. Honest limits documented:
+dark/low-sun pairs report geometry_registered (no fabricated content alignment),
+IIRS ships no geometry CSV so it stays content-only, and the reposited reference
+is LRO NAC (SELENE supported conceptually but not present in local `data/`).

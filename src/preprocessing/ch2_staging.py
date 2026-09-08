@@ -35,6 +35,7 @@ from src.preprocessing.tmc import (
     read_ground_grid,
     _gsd_m,
 )
+from src.visuals import frame_img, highlight_box
 
 ENHANCE_PERCENTILES = (1, 99)
 CLAHE_CLIP = 4.0
@@ -107,9 +108,6 @@ def _inverse_maps(pix_axis, scan_axis, lon_grid, lat_grid):
     return f_scan, f_pix
 
 
-RECT_COLOR = (0, 0, 255)  # BGR red
-
-
 def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600,
                            max_aspect=3.5):
     """Build a display-ready 'before' crop: a context window around the native
@@ -154,52 +152,12 @@ def _make_original_preview(ll, scan_vals, pix_vals, max_w=640, max_h=1600,
 def _draw_highlight_box(gray, box):
     """Red rectangle + 'OVERLAP SWATH' label around the extracted window; the
     context outside the box is dimmed hard so the change cannot be missed."""
-    bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    if box:
-        x0, y0, x1, y1 = box
-        h, w = bgr.shape[:2]
-        inside = np.zeros((h, w), bool)
-        inside[max(0, y0):min(h, y1 + 1), max(0, x0):min(w, x1 + 1)] = True
-        dimmed = bgr[~inside]
-        bgr[~inside] = (dimmed * 0.35).astype(np.uint8)
-        t = max(4, int(min(h, w) / 30))
-        cv2.rectangle(bgr, (x0, y0), (x1, y1), RECT_COLOR, t)
-        text = "OVERLAP SWATH"
-        fs = max(0.7, min(h, w) / 420)
-        th = max(2, int(fs * 3.2))
-        (tw, thb), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
-        tx = max(2, min(x0, max(2, w - tw - 8)))
-        ty = max(thb + 6, y0 - thb - 10)
-        cv2.rectangle(bgr, (tx - 8, ty - thb - 8), (tx + tw + 8, ty + 6),
-                      (0, 0, 0), -1)
-        cv2.putText(bgr, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, fs,
-                    (255, 255, 255), th, cv2.LINE_AA)
-        cv2.putText(bgr, text, (tx + max(1, th // 6), ty), cv2.FONT_HERSHEY_SIMPLEX,
-                    fs, RECT_COLOR, max(1, th // 5), cv2.LINE_AA)
-    return bgr
+    return highlight_box(gray, box, tag="OVERLAP SWATH")
 
 
 def _outline_registered(gray, tag="REGISTERED"):
-    """Red outline + 'REGISTERED' tag around a registered product."""
-    bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    h, w = bgr.shape[:2]
-    t = max(4, int(min(h, w) / 30))
-    cv2.rectangle(bgr, (0, 0), (w - 1, h - 1), RECT_COLOR, t)
-    glow_t = max(1, t // 3)
-    cv2.rectangle(bgr, (t + glow_t, t + glow_t),
-                  (w - 1 - t - glow_t, h - 1 - t - glow_t), RECT_COLOR, glow_t)
-    fs = max(0.7, min(h, w) / 420)
-    th = max(2, int(fs * 3.2))
-    (tw, thb), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
-    pad = max(6, t // 2)
-    cv2.rectangle(bgr, (pad - 2, pad - 2),
-                  (pad + tw + 10, pad + thb + 6), (0, 0, 0), -1)
-    cv2.putText(bgr, tag, (pad + 8, pad + thb + 2), cv2.FONT_HERSHEY_SIMPLEX, fs,
-                (255, 255, 255), th, cv2.LINE_AA)
-    cv2.putText(bgr, tag, (pad + 8 + max(1, th // 6), pad + thb + 2),
-                cv2.FONT_HERSHEY_SIMPLEX, fs, RECT_COLOR, max(1, th // 5),
-                cv2.LINE_AA)
-    return bgr
+    """Red outline + ``tag`` around a registered product (shared visuals)."""
+    return frame_img(gray, tag=tag)
 
 
 def stage_ch2_ground_pair(src_img, src_geom, ref_img, ref_geom, *,
@@ -420,6 +378,7 @@ def register_ch2_pair(src_img, src_geom, ref_img, ref_geom, *, out_dir,
         report["notes"].append(
             f"content registration on enhanced pair; front={res['front']}")
         _write_content_fig(report, src_e, ref_e, res, out_dir, prefix)
+        _save_correspondences(report, res, out_dir, prefix)
     else:
         # --- 3. geometry fallback (dark / polar / featureless) ---
         report.update(
@@ -450,6 +409,26 @@ def _write_content_fig(report, src, ref, res, out_dir, prefix):
         report["artifacts"]["matches"] = path
     except Exception as exc:  # noqa: BLE001
         report["notes"].append(f"match figure failed: {exc}")
+
+
+def _save_correspondences(report, res, out_dir, prefix):
+    """Persist the inlier (verified) source<->reference point pairs as CSV — the
+    'registered product with corresponding match points' deliverable."""
+    try:
+        p1, p2, inl = res.get("pts1"), res.get("pts2"), res.get("inl")
+        if p1 is None or p2 is None or inl is None or int(np.count_nonzero(inl)) == 0:
+            return
+        p1i, p2i = p1[inl > 0], p2[inl > 0]
+        path = os.path.join(out_dir, f"{prefix}_inliers.csv")
+        with open(path, "w", newline="") as fh:
+            fh.write("src_x,src_y,ref_x,ref_y\n")
+            for (x1, y1), (x2, y2) in zip(p1i, p2i):
+                fh.write(f"{float(x1):.4f},{float(y1):.4f},"
+                         f"{float(x2):.4f},{float(y2):.4f}\n")
+        report["artifacts"]["correspondences"] = path
+        report["inlier_points_saved"] = int(len(p1i))
+    except Exception as exc:  # noqa: BLE001
+        report["notes"].append(f"correspondence save failed: {exc}")
 
 
 def _dump(report, out_dir, prefix):
