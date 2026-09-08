@@ -26,6 +26,10 @@ results/logs/*
 
 .env
 ._*
+.fuse_hidden*
+
+# AI execution plan is maintained locally only (kept out of git)
+AI_EXECUTION_PLAN.md
 
 # Phase 3 vendored third-party pretrained weights + sample media (re-downloadable;
 # URLs logged in results/logs/phase3_summary.md). Keeps the repo lean while the

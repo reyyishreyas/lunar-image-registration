@@ -141,6 +141,7 @@ def main():
 
     with st.sidebar:
         mode = st.radio("Input mode", [
+            "Automatic registration",
             "Project pair-1",
             "Project pair-2 (polar, geometry registration)",
             "Upload aligned crops",
@@ -162,6 +163,12 @@ def main():
 
     res = st.session_state["result"]
     st.subheader("Results")
+    if res.get("mode") == "auto":
+        if res.get("error"):
+            st.info(res["error"])
+            return
+        _render_auto(res)
+        return
     if res.get("mode") == "phase5":
         _render_phase5(res)
         return
@@ -287,6 +294,79 @@ def _render_phase5(res):
     st.image(meta.get("overlay_png"), caption="50/50 overlay", width=1240)
 
 
+def _execute_auto(normalize, equal_gsd):
+    """One-click fully-automatic registration: choose a preset pair or upload the
+    three inputs, then run_auto does everything (stage, register, decide,
+    report)."""
+    from src.auto_pipeline import run_auto
+
+    source = st.radio("Input source", ["Project pair-1", "Project pair-2 (polar)"],
+                      key="auto_source")
+    if source.startswith("Project pair-1"):
+        pair = PAIR1
+        nac_geom = ""
+        gt = "data/ground_truth/pair1_gt_v2.csv"
+    else:
+        pair = PAIR2
+        nac_geom = pair.get("nac_geometry", "")
+        gt = ""
+
+    out_dir = os.path.join(DEMO_DIR, "auto")
+    prefix = "auto_pair1" if source.startswith("Project pair-1") else "auto_pair2"
+
+    if st.button("Run fully-automatic registration"):
+        st.session_state["auto_report"] = run_auto(
+            pair["ohrc_img"], pair["ohrc_geometry"], pair["nac_img"],
+            out_dir=os.path.relpath(out_dir, ROOT), prefix=prefix,
+            nac_geom_csv=nac_geom, ground_truth=gt,
+            normalize=normalize, equal_gsd=equal_gsd,
+            root=ROOT, fresh=True,
+        )
+    if "auto_report" in st.session_state and st.session_state["auto_report"]:
+        return {"mode": "auto", "report": st.session_state["auto_report"],
+                "prefix": prefix, "out_dir": out_dir}
+    return {"error": "Press **Run fully-automatic registration** to start.",
+            "notes": {}}
+
+
+def _render_auto(res):
+    from src.auto_pipeline import summarize
+
+    rep = res.get("report", {})
+    verdict = rep.get("verdict")
+    st.subheader("Fully-automatic result")
+    st.success(summarize(rep))
+
+    c = st.columns(4)
+    c[0].metric("Verdict", verdict)
+    c[1].metric("RMSE vs reference (px)",
+                f"{rep.get('rmse_px')}" if rep.get("rmse_px") is not None else "n/a")
+    c[2].metric("Inliers", f"{rep.get('inliers')}")
+    c[3].metric("Self-RMSE (px)",
+                f"{rep.get('rmse_self_px')}" if rep.get("rmse_self_px") is not None else "n/a")
+
+    if verdict in ("registered", "geometry_registered"):
+        meth = rep.get("method")
+        st.caption(f"Method: **{meth}**"
+                   + (f" · GSD {rep.get('staged_gsd_m')} m/px"
+                      if rep.get("staged_gsd_m") else ""))
+        arts = rep.get("artifacts") or {}
+        for key in ("matches", "checkerboard", "overlay", "src", "ref"):
+            p = arts.get(key)
+            if p and os.path.exists(os.path.join(ROOT, p)):
+                st.image(os.path.join(ROOT, p), caption=key, width=640)
+        if rep.get("rmse_px") is not None and 0 < rep["rmse_px"] < 1.0:
+            st.success(f"**Sub-pixel registration**: RMSE {rep['rmse_px']:.4f} px "
+                       "< 1.0 px target.")
+    elif verdict == "no_content_correspondence":
+        st.info("No content correspondence; geometry fallback was used "
+                "(feature match not verifiable — photometric/polar pair).")
+    else:
+        st.error("Registration not completed: " + " | ".join(rep.get("notes", [])))
+    if rep.get("notes"):
+        st.caption("Notes: " + " | ".join(rep.get("notes", [])))
+
+
 def _execute(mode, normalize, equal_gsd, use_cached):
     os.makedirs(os.path.join(ROOT, UPLOAD_DIR), exist_ok=True)
     try:
@@ -294,6 +374,9 @@ def _execute(mode, normalize, equal_gsd, use_cached):
             return _load_fallback(mode)
 
         from src.pipeline import run_experiment
+
+        if mode.startswith("Automatic"):
+            return _execute_auto(normalize, equal_gsd)
 
         if mode.startswith("Project pair-1"):
             cfg = build_pair_config(PAIR1, dict(normalize=normalize,

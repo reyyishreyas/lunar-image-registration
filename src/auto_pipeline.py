@@ -1,0 +1,385 @@
+"""Fully-automatic registration pipeline (Phase 8).
+
+Drop in the three inputs and this module does everything:
+
+    OHRC .img  +  OHRC geometry CSV  +  NAC .IMG
+
+Automatic steps:
+  1. Georeference / stage both sensors to a common ground grid (SIFT anchor +
+     equal-GSD self-calibration when geometry is available).
+  2. Detect + match + robust-fit the champion config (SIFT + CLAHE + USAC_MAGSAC),
+     then iteratively refit the homography to the tight sub-pixel set.
+  3. Decide the outcome automatically:
+       * content registration  -> overlay, matches, fitted homography, RMSE
+       * no content correspondence (photometric gap, e.g. polar pair-2)
+         -> geometry-based registration (SPICE + ISRO CSV) with an honest
+            "feature correspondence not verifiable" note
+       * too few reliable inliers -> explicit non-registration failure (never
+            silently returns garbage)
+  4. Emit a single self-contained report: {pair, method, RMSE, inliers, ratio,
+     homography, staged GSD, coverage, verdict, artifacts}.
+
+This is the single auto entry point shared by scripts/run_auto.py (CLI) and the
+Streamlit "Automatic" page. It intentionally reuses the repository pipeline
+modules (src/pipeline, src/preprocessing/*, src/evaluation/*) rather than
+reimplementing any matching logic.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import os
+import tempfile
+
+import cv2
+import numpy as np
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FINAL_CONFIG = "results/final_config.yaml"
+
+
+# --------------------------------------------------------------------------- #
+# small helpers (homography fit / residual — kept local & dependency-light)
+# --------------------------------------------------------------------------- #
+def _lsq_homography(pts1, pts2):
+    """Least-squares homography pts1 -> pts2 (DLT, 8-dof)."""
+    M, v = [], []
+    for x, y, xx, yy in zip(pts1[:, 0], pts1[:, 1], pts2[:, 0], pts2[:, 1]):
+        M.append([x, y, 1, 0, 0, 0, -x * xx, -y * xx])
+        v.append(xx)
+        M.append([0, 0, 0, x, y, 1, -x * yy, -y * yy])
+        v.append(yy)
+    h, _, _, _ = np.linalg.lstsq(np.float64(M), np.array(v, float), rcond=None)
+    return np.concatenate([h, [1.0]]).reshape(3, 3)
+
+
+def _apply_homography(H, pts):
+    pts = np.asarray(pts, np.float64)
+    ones = np.ones((pts.shape[0], 1))
+    out = (H @ np.hstack([pts, ones]).T).T
+    x, y, w = out[:, 0], out[:, 1], out[:, 2]
+    w = np.where(np.abs(w) < 1e-12, 1e-12, w)
+    return np.stack([x / w, y / w], axis=1)
+
+
+def _tighten(pts1, pts2, thresholds=(5.0, 3.0, 2.0, 1.5)):
+    """Iteratively fit + threshold-tighten a homography to a tight sub-pixel set.
+
+    Seeds from a robust USAC_MAGSAC fit so a few gross outliers can never
+    destabilise the first least-squares model, then iteratively tightens.
+    Returns (H, keep, res); keep is a boolean mask over the input array.
+    """
+    from src.outlier_rejection.ransac import find_homography_ransac
+
+    H0, inl = find_homography_ransac(pts1, pts2, ransac_thresh=5.0,
+                                     method="usac_magsac")
+    if H0 is None or inl is None or inl.sum() < 8:
+        return _lsq_homography(pts1, pts2), np.ones(len(pts1), bool), \
+            np.linalg.norm(_apply_homography(_lsq_homography(pts1, pts2),
+                                             pts1) - pts2, axis=1)
+
+    keep = inl.copy()
+    H = _lsq_homography(pts1[keep], pts2[keep])
+    for t in thresholds:
+        if keep.sum() < 8:
+            break
+        r = np.linalg.norm(_apply_homography(H, pts1) - pts2, axis=1)
+        keep = keep & (r < t)
+        if keep.sum() < 4:
+            break
+        H = _lsq_homography(pts1[keep], pts2[keep])
+    r = np.linalg.norm(_apply_homography(H, pts1) - pts2, axis=1)
+    # final clean refit on the tight set
+    if keep.sum() >= 4:
+        H = _lsq_homography(pts1[keep], pts2[keep])
+        r = np.linalg.norm(_apply_homography(H, pts1) - pts2, axis=1)
+    return H, keep, r
+
+
+def _rmse(H, pts1, pts2):
+    r = np.linalg.norm(_apply_homography(H, np.asarray(pts1)) -
+                       np.asarray(pts2), axis=1)
+    return float(np.sqrt(np.mean(r ** 2))), r
+
+
+# --------------------------------------------------------------------------- #
+# core automatic routine
+# --------------------------------------------------------------------------- #
+def run_auto(ohrc_img, ohrc_geom, nac_img, *, out_dir="data/processed/auto",
+             prefix="auto", nac_geom_csv="", ground_truth="",
+             normalize="clahe", crop_px=1024, equal_gsd=False, root=PROJECT_ROOT,
+             use_pipeline=True, verbose=True, seed=0, fresh=True):
+    """Run the whole registration automatically for one OHRC<->NAC pair.
+
+    Parameters mirror the repository config keys so callers can pass real paths.
+    Returns a single report dict (JSON-serialisable). Never raises for an
+    un-registerable pair — it records an explicit verdict instead.
+
+    ``seed`` makes the georeference flip-decision and RANSAC deterministic;
+    ``fresh`` clears the staged crops for this prefix first so a stale crop from
+    a previous equal-GSD / flip variant can never contaminate the result.
+    """
+    # deterministic RANSAC + SIFT so the flip decision is reproducible
+    cv2.setRNGSeed(int(seed))
+    np.random.seed(int(seed))
+    join = lambda p: p if os.path.isabs(p) else os.path.join(root, p)  # noqa: E731
+    os.makedirs(join(out_dir), exist_ok=True)
+    if fresh:
+        for f in (f"{prefix}_src.png", f"{prefix}_ref.png",
+                  f"georef_{prefix}.json"):
+            p = join(os.path.join(out_dir, f))
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+    report = {
+        "pair": {"ohrc_img": ohrc_img, "ohrc_geometry": ohrc_geom,
+                 "nac_img": nac_img},
+        "config": {"crop_px": crop_px, "equal_gsd": equal_gsd,
+                   "normalize": normalize, "nac_geom_csv": nac_geom_csv,
+                   "ground_truth": ground_truth},
+        "out_dir": out_dir,
+        "method": None, "verdict": None, "rmse_px": None,
+        "rmse_self_px": None, "inliers": 0, "inlier_ratio": 0.0,
+        "n_matches": 0, "homography": None, "staged_gsd_m": None,
+        "artifacts": {}, "notes": [],
+    }
+
+    # ---- 1. stage (georeference + equal-GSD + precondition) ----
+    try:
+        if use_pipeline:
+            import yaml
+            with open(join(FINAL_CONFIG)) as fh:
+                base = yaml.safe_load(fh)
+            pre = dict(base["preprocessing"])
+            pre.update({
+                "ohrc_img": ohrc_img, "ohrc_geometry": ohrc_geom,
+                "nac_img": nac_img, "out_dir": out_dir,
+                "prefix": prefix, "crop_px": crop_px,
+                "equal_gsd": equal_gsd, "nac_geom_csv": nac_geom_csv,
+                "outputs": {"src": os.path.join(out_dir, f"{prefix}_src.png"),
+                            "ref": os.path.join(out_dir, f"{prefix}_ref.png")},
+            })
+            norm = dict(base["normalize"])
+            if normalize != "none":
+                norm["enabled"] = True
+                norm["method"] = normalize
+            else:
+                norm["enabled"] = False
+
+            from src.preprocessing.staging import stage_pair
+            st = stage_pair(pre, norm, root=root)
+            src, ref = st["src"], st["ref"]
+            report["staged_gsd_m"] = st["gsd_m"]
+            if st["meta"]:
+                report["notes"].append(
+                    f"georeference method={st['meta'].get('georef_method')}, "
+                    f"flip={st['meta'].get('nac_flip')}")
+        else:
+            # minimal fallback: read the staged PNGs directly
+            src = cv2.imread(join(os.path.join(out_dir, f"{prefix}_src.png")),
+                             cv2.IMREAD_GRAYSCALE)
+            ref = cv2.imread(join(os.path.join(out_dir, f"{prefix}_ref.png")),
+                             cv2.IMREAD_GRAYSCALE)
+            from src.preprocessing.staging import apply_precondition
+            src, ref, _ = apply_precondition(src, ref, {"enabled": normalize != "none",
+                                                        "method": normalize})
+            if src is None or ref is None:
+                report["verdict"] = "input_error"
+                report["notes"].append(
+                    "could not read staged crops; ensure georeferencing wrote "
+                    f"{prefix}_src.png / {prefix}_ref.png")
+                return report
+    except Exception as exc:  # noqa: BLE001
+        # content-style staging failed for this pair (e.g. incompatible CSV
+        # format, photometric/polar case). If a NAC geometry CSV is available we
+        # still try the SPICE+ISRO geometry route instead of hard-failing.
+        report["method"] = "geometry"
+        report["verdict"] = "no_content_correspondence"
+        report["notes"].append(f"content staging/georeference failed: {exc}")
+        diag = os.path.join(out_dir, f"georef_{prefix}_diagnostics.json")
+        if os.path.exists(join(diag)):
+            report["notes"].append(f"georef diagnostics: {diag}")
+        if nac_geom_csv:
+            return _geometry_fallback(report, join, out_dir, prefix,
+                                      ohrc_img, ohrc_geom, nac_img,
+                                      nac_geom_csv, root)
+        return report
+
+    # ---- 2. detect + match + robust fit (champion config: SIFT + CLAHE) ----
+    try:
+        from src.detection.classical import detect_sift
+        from src.matching.classical_match import match_bf_ratio
+
+        kp1, d1 = detect_sift(src, verbose=False, nfeatures=10000,
+                              contrast_threshold=0.04, edge_threshold=10)
+        kp2, d2 = detect_sift(ref, verbose=False, nfeatures=10000,
+                              contrast_threshold=0.04, edge_threshold=10)
+        m = match_bf_ratio(d1, d2, ratio=0.75, norm_type=cv2.NORM_L2,
+                           verbose=False)
+        pts1 = np.float32([kp1[x.queryIdx].pt for x in m]).reshape(-1, 2)
+        pts2 = np.float32([kp2[x.trainIdx].pt for x in m]).reshape(-1, 2)
+        report["n_matches"] = len(m)
+
+        # robust initial fit (USAC_MAGSAC, 5px)
+        from src.outlier_rejection.ransac import find_homography_ransac
+        H0, inl = find_homography_ransac(pts1, pts2, ransac_thresh=5.0,
+                                         method="usac_magsac")
+        if H0 is None or inl is None or inl.sum() < 8:
+            # ─ too few reliable inliers → non-content pair ─
+            report["method"] = "geometry"
+            report["verdict"] = "no_content_correspondence"
+            report["inliers"] = int(inl.sum()) if inl is not None else 0
+            report["notes"].append(
+                "too few reliable inliers (< 8) from content matching; "
+                "trying geometry-based registration")
+            if nac_geom_csv:
+                return _geometry_fallback(report, join, out_dir, prefix,
+                                          ohrc_img, ohrc_geom, nac_img,
+                                          nac_geom_csv, root)
+            return report
+        report["inliers"] = int(inl.sum())
+        report["inlier_ratio"] = round(float(inl.sum()) / len(m), 4)
+
+        # sub-pixel tightening on the MAGSAC inliers
+        Ht, keep, r_self = _tighten(pts1, pts2,
+                                    thresholds=(5.0, 3.0, 2.0, 1.5))
+        rmse_self, _ = _rmse(Ht, pts1[keep], pts2[keep])
+        report["homography"] = Ht.tolist()
+        report["rmse_self_px"] = round(rmse_self, 4)
+        report["inliers"] = int(keep.sum())
+        report["inlier_ratio"] = round(float(keep.sum()) / len(m), 4)
+
+        # RMSE against provided ground truth (if any)
+        if ground_truth and os.path.exists(join(ground_truth)):
+            gt = np.loadtxt(join(ground_truth), delimiter=",", skiprows=1)
+            rmse_gt, _ = _rmse(Ht, gt[:, :2], gt[:, 2:])
+            report["rmse_px"] = round(float(rmse_gt), 4)
+        report["method"] = "content"
+        report["verdict"] = "registered"
+    except Exception as exc:  # noqa: BLE001
+        report["verdict"] = "registration_failed"
+        report["notes"].append(f"detection/matching/refinement failed: {exc}")
+        return report
+
+    # ---- 3. artifacts: overlay + match figure ----
+    report["artifacts"] = _write_artifacts(report, src, ref, kp1, kp2, pts1,
+                                           pts2, join, out_dir, prefix)
+    return report
+
+
+def _geometry_fallback(report, join, out_dir, prefix, ohrc_img, ohrc_geom,
+                       nac_img, nac_geom_csv, root):
+    """Register by geometry (SPICE + ISRO CSV) when content matching fails."""
+    try:
+        from src.preprocessing.geometry import georeference_phase5
+        meta = georeference_phase5(
+            join(ohrc_img), join(ohrc_geom), join(nac_img), join(nac_geom_csv),
+            os.path.join(out_dir, "phase5"),
+        )
+        report["georef_meta"] = meta
+        report["method"] = "geometry"
+        report["verdict"] = "geometry_registered"
+        report["staged_gsd_m"] = meta.get("gsd_m")
+        report["notes"].append("geometry registration successful; "
+                               "feature correspondence NOT verifiable")
+        report["artifacts"] = {
+            "src": meta.get("src_png"), "ref": meta.get("ref_png"),
+            "overlay": meta.get("overlay_png"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        report["verdict"] = "registration_failed"
+        report["notes"].append(f"geometry fallback also failed: {exc}")
+    return report
+
+
+def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,
+                     prefix):
+    """Write match overlay + checkerboard; return artifact path dict."""
+    out = {}
+    try:
+        from src.evaluation.visualize import draw_matches
+
+        m_fig = os.path.join(out_dir, f"{prefix}_matches.png")
+        draw_matches(src, kp1, ref, kp2,
+                     [cv2.DMatch(i, i, 0.0) for i in range(len(pts1))],
+                     join(m_fig), inlier_mask=np.ones(len(pts1), bool))
+        out["matches"] = os.path.join(out_dir, f"{prefix}_matches.png")
+    except Exception as exc:  # noqa: BLE001
+        report["notes"].append(f"match figure failed: {exc}")
+
+    # checkerboard of the staged aligned crops
+    try:
+        chk = np.zeros_like(src)
+        tiles = 8
+        th, tw = src.shape[0] // tiles, src.shape[1] // tiles
+        for i in range(tiles):
+            for j in range(tiles):
+                chk[i * th:(i + 1) * th, j * tw:(j + 1) * tw] = (
+                    ref[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
+                    if (i + j) % 2 == 0
+                    else src[i * th:(i + 1) * th, j * tw:(j + 1) * tw])
+        c_path = os.path.join(out_dir, f"{prefix}_checkerboard.png")
+        cv2.imwrite(join(c_path), chk)
+        out["checkerboard"] = os.path.join(out_dir, f"{prefix}_checkerboard.png")
+    except Exception as exc:  # noqa: BLE001
+        report["notes"].append(f"checkerboard figure failed: {exc}")
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# report writer
+# --------------------------------------------------------------------------- #
+def write_json_report(report, path, root=PROJECT_ROOT):
+    p = path if os.path.isabs(path) else os.path.join(root, path)
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    with open(p, "w") as fh:
+        json.dump(report, fh, indent=2, default=str)
+    return p
+
+
+def load_report(path, root=PROJECT_ROOT):
+    p = path if os.path.isabs(path) else os.path.join(root, path)
+    with open(p) as fh:
+        return json.load(fh)
+
+
+def summarize(report):
+    """Human-readable single-line summary of a report."""
+    v = report.get("verdict")
+    if v == "registered":
+        return ("REGISTERED (content): RMSE={rmse_px} px, self-RMSE="
+                "{rmse_self_px} px, {inliers} inliers / {inlier_ratio} ratio, "
+                "{n_matches} matches").format(**report)
+    if v == "geometry_registered":
+        return ("GEOMETRY REGISTERED (no content): GSD={staged_gsd_m} m, "
+                "method=SPICE+ISRO").format(**report)
+    if v == "no_content_correspondence":
+        return "NO CONTENT CORRESPONDENCE — trying geometry registration"
+    return f"REGISTRATION NOT COMPLETED — verdict={v} ({len(report.get('notes', []))} notes)"
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="auto registration (single pair)")
+    ap.add_argument("--ohrc_img", required=True)
+    ap.add_argument("--ohrc_geom", required=True)
+    ap.add_argument("--nac_img", required=True)
+    ap.add_argument("--nac_geom", default="", help="NAC SPICE geometry CSV (for equal-GSD seed / geometry fallback)")
+    ap.add_argument("--ground_truth", default="data/ground_truth/pair1_gt_v2.csv")
+    ap.add_argument("--out_dir", default="data/processed/auto")
+    ap.add_argument("--prefix", default="auto")
+    ap.add_argument("--no-nac-geom", action="store_true")
+    args = ap.parse_args()
+
+    rep = run_auto(
+        args.ohrc_img, args.ohrc_geom, args.nac_img,
+        out_dir=args.out_dir, prefix=args.prefix,
+        nac_geom_csv="" if args.no_nac_geom else args.nac_geom,
+        ground_truth=args.ground_truth,
+    )
+    print(summarize(rep))
+    write_json_report(rep, os.path.join(args.out_dir, "report.json"))
+    print("report ->", os.path.join(args.out_dir, "report.json"))
