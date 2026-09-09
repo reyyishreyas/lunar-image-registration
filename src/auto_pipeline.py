@@ -481,6 +481,7 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
     registers), never a fabricated homography.
     """
     join = lambda p: p if os.path.isabs(p) else os.path.join(root, p)  # noqa: E731
+    j = lambda p: join(p) if p else ""  # noqa: E731  # empty stays "" — never os.path.join(root, "") == root dir!
     os.makedirs(join(out_dir), exist_ok=True)
 
     if sensor_pair not in SUPPORTED_SENSOR_PAIRS:
@@ -504,12 +505,12 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
                 register_ch2_pair, register_ch2_to_nac)
             if sensor_pair == "tmc-nac":
                 report = register_ch2_to_nac(
-                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    j(src_img), j(src_geom), j(ref_img), j(ref_geom),
                     out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
                 )
             else:
                 report = register_ch2_pair(
-                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    j(src_img), j(src_geom), j(ref_img), j(ref_geom),
                     out_dir=join(out_dir), prefix=prefix, n_along=crop_rows,
                 )
         else:  # iirs-ohrc / iirs-nac / iirs-iirs
@@ -517,19 +518,19 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
                 register_iirs_to_ohrc, register_iirs_to_nac)
             if sensor_pair == "iirs-nac":
                 report = register_iirs_to_nac(
-                    join(src_img), join(src_geom), join(ref_img),
+                    j(src_img), j(src_geom), j(ref_img),
                     out_dir=join(out_dir), prefix=prefix, bands=bands,
                     n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
                 )
             elif sensor_pair == "iirs-iirs":
                 report = register_iirs_to_ohrc(
-                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    j(src_img), j(src_geom), j(ref_img), j(ref_geom),
                     out_dir=join(out_dir), prefix=prefix, bands=bands,
                     n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
                 )
             else:
                 report = register_iirs_to_ohrc(
-                    join(src_img), join(src_geom), join(ref_img), join(ref_geom),
+                    j(src_img), j(src_geom), j(ref_img), j(ref_geom),
                     out_dir=join(out_dir), prefix=prefix, bands=bands,
                     n_bands=n_bands, min_inliers=min_inliers, min_ratio=min_ratio,
                 )

@@ -28,6 +28,11 @@ from __future__ import annotations
 import os
 import sys
 
+sys.dont_write_bytecode = True  # repo lives on a .mounty FUSE mount: mtime-based
+                                # .pyc invalidation is unreliable and served a
+                                # stale auto_pipeline cache once (ImportError:
+                                # detect_pair).
+
 import cv2
 import numpy as np
 import streamlit as st

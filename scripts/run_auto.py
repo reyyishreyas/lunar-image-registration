@@ -33,8 +33,14 @@ import argparse
 import os
 import sys
 
+sys.dont_write_bytecode = True  # .mounty FUSE mount: unreliable .pyc invalidation,
+                                # stale cache has shadowed newer src code.
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+import cv2  # noqa: E402
 
 
 def main():
