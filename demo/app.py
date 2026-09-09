@@ -216,7 +216,14 @@ def _sensor_metric_cols(rep):
         gsd_txt = "—"
     c[1].metric("GSD (m/px)", gsd_txt)
     rmse = rep.get("rmse_px")
-    c[2].metric("RMSE (px)", f"{rmse:.3f}" if isinstance(rmse, float) else "n/a")
+    rs = rep.get("rmse_self_px")
+    if isinstance(rmse, (int, float)):
+        rmse_txt = f"{float(rmse):.3f}"
+    elif isinstance(rs, (int, float)):
+        rmse_txt = f"{float(rs):.3f} (self)"
+    else:
+        rmse_txt = "n/a"
+    c[2].metric("RMSE (px)", rmse_txt)
     c[3].metric("Inliers", f"{rep.get('inliers', 0)} ({rep.get('n_matches', 0)} raw)"
                             if rep.get("inliers") else "n/a")
     return verdict

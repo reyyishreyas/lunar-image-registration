@@ -123,6 +123,15 @@ tiles all ≤ 1.44 px, `best_aligned` on disk and exposed.
 
 ## Verification
 
+Note for the live demo: GSD / artifacts are part of the *report dict*, which the
+app only refreshes when **Register this pair** is pressed inside a restarted
+Streamlit process. A long-lived server keeps the pre-fix module + session
+report (no `gsd`, no `best_product`); restart `streamlit run demo/app.py` and
+re-register to see GSD 0.973 / 3.098 m/px, ratio 3.184, self-RMSE, tiles, and
+the aligned product. Content matches have no ground truth, so `rmse_px` is
+None by design — the RMSE column now falls back to `rmse_self_px` ("0.967
+(self)") instead of "n/a".
+
 - `ast.parse` OK on `demo/app.py`, `scripts/run_auto.py`, `src/auto_pipeline.py`;
   all `src` imports resolve (no stale bytecode).
 - `streamlit.testing.v1.AppTest` boots the app with **0 exceptions**;
