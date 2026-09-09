@@ -11,6 +11,7 @@ from src.auto_pipeline import (
     _local_norm_residual,
     _match_histogram_2d,
     _nac_gsd_from_meta,
+    _residual_structure,
     _sensor_gsd_report,
     _tile_residuals,
 )
@@ -62,15 +63,15 @@ def test_best_product_prefers_warped_aligned_over_checkerboard():
     assert best_product(report) == "a_aligned.png"
 
 
-def test_checkerboard_hatches_outside_mask():
+def test_checkerboard_stipples_outside_mask():
     a = np.full((16, 16), 30, np.uint8)
     b = np.full((16, 16), 200, np.uint8)
     mask = np.zeros((16, 16), bool)
     mask[8:, :] = True
     chk = _checkerboard(a, b, tiles=4, mask=mask)
-    top = chk[:4, :4]  # no mask -> hatch pattern present (val 120 on grid lines)
-    assert (top[::4, :] == 120).all()
-    assert (top[::4][0] != 0).all()
+    top = chk[:4, :4].ravel()  # no data above -> dim stipple, never raw content
+    assert (top == 64).any() and (top == 110).any()
+    assert not (top == 30).any() and not (top == 200).any()
 
 
 def test_local_norm_residual_removes_brightness_mismatch():
@@ -80,10 +81,32 @@ def test_local_norm_residual_removes_brightness_mismatch():
     a = np.clip(base, 0, 255).astype(np.uint8)
     b = np.clip(0.6 * base + 45, 0, 255).astype(np.uint8)  # same structure,
     mask = np.ones(a.shape, bool)                          # different brightness
-    img, mean = _local_norm_residual(a, b, mask, k=15, gain=90.0)
+    img, mean, std, res = _local_norm_residual(a, b, mask, k=15)
     # local normalisation cancels the global gain/offset -> near-zero residual
     assert mean < 0.15
     assert img.shape == a.shape and img.dtype == np.uint8
+
+
+def test_residual_structure_reports_smooth_energy_low_for_noise():
+    rng = np.random.default_rng(0)
+    noise = rng.standard_normal((128, 128)).astype(np.float32)
+    st = _residual_structure(noise, np.ones((128, 128), bool), mean=0.0)
+    # white noise -> smooth component carries a small share of the variance
+    assert st["braid_energy"] < 0.35
+    assert st["std"] > 0
+
+
+def test_tile_nmis_distribution_and_mask_indexing():
+    from src.auto_pipeline import _tile_nmis
+    yy, xx = np.mgrid[0:128, 0:128]
+    a = (40 * np.exp(-((xx - 64) ** 2 + (yy - 64) ** 2) / 400)
+         + np.sin(2 * np.pi * xx / 9)).astype(np.uint8)
+    b = a.copy()  # identical -> every tile NMI~high
+    mask = np.ones(a.shape, bool)
+    r = _tile_nmis(a, b, mask[:, :], tiles=8)
+    assert r["min"] > 1.0 and r["max"] > 1.0
+    assert r["median"] >= r["min"] and r["mean"] <= r["max"]
+    assert r["above_1_05"] == 1.0
 
 
 def test_match_histogram_2d_aligns_brightness():

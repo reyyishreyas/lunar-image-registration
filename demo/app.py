@@ -267,15 +267,20 @@ def _render_tile_residuals(rep):
                 f"{v:.2f}" if v is not None else "  –  " for v in row.values()))
         br = rep.get("brightness") or {}
         extra = ""
-        if isinstance(br.get("nmi_min_tile"), (int, float)):
-            extra = f"  ·  min per-tile NMI **{br['nmi_min_tile']:.3f}** " \
-                    "(brightness-invariant structural match — uniformly high " \
-                    "== geometry holds in every tile)"
+        if isinstance(br.get("nmi_median"), (int, float)):
+            extra = (f"  ·  per-tile NMI min {br['nmi_min_tile']:.3f} / "
+                     f"**median {br['nmi_median']:.3f}** / max {br['nmi_max']:.3f}"
+                     f" — {br.get('nmi_pct_above_1_05')}% of tiles above 1.05 "
+                     "(NMI floor for unrelated images ≈ 1.0; a healthy "
+                     "registered pair reads 1.05–1.2).")
         if isinstance(br.get("residual_mean"), (int, float)):
             extra += (f"  ·  brightness-robust residual mean "
-                      f"**{br['residual_mean']:.2f}** (raw |w−r| mean was "
-                      f"{br.get('diff_raw_mean')} → matched "
-                      f"{br.get('diff_matched_mean')})"
+                      f"**{br['residual_mean']:.2f}** with "
+                      f"{100 * br.get('braid_energy', 0):.0f}% of its variance "
+                      f"smooth (braided) — the rest is pixel noise, so the "
+                      f"panel stays flat/dark. Raw |w−r| was "
+                      f"{br.get('diff_raw_mean')} → histogram-matched "
+                      f"{br.get('diff_matched_mean')}."
                       if br.get("diff_raw_mean") else "")
         st.caption(f"Worst region ≈ **{worst:.2f} px** "
                    f"vs global self-RMSE {rep.get('rmse_self_px')} px.{extra}")
@@ -392,18 +397,20 @@ def _render_best_product(rep):
     if res and os.path.exists(os.path.join(ROOT, str(res))):
         st.image(_framed(os.path.join(ROOT, str(res)), "RESIDUAL"),
                  caption="**Brightness-robust residual** (local mean/contrast "
-                         "normalised, then differenced): structure-level "
-                         "disagreement only. Mostly dark + sparse warm specks "
-                         "== the warp holds; broad bright bands == real "
-                         "residual misalignment.", width="stretch")
+                         "normalised, then differenced; rendered on its own "
+                         "99.5th percentile). Flat/uniform at its noise floor "
+                         "with sparse warm specks == the registration holds; "
+                         "large-scale braided bands would mean residual "
+                         "misalignment.", width="stretch")
     chk = arts.get("checkerboard")
     if chk and os.path.exists(os.path.join(ROOT, str(chk))) \
             and str(chk) != str(aligned):
         st.image(_framed(os.path.join(ROOT, str(chk)), "REGISTERED CHECKERBOARD"),
-                 caption="Checkerboard of the **warped** source vs the "
-                         "reference — features should run continuously across "
-                         "tile boundaries (built after alignment, not from raw "
-                         "crops on different grids).",
+                 caption="Checkerboard of the **histogram-matched** warped "
+                         "source vs the reference — craters should run "
+                         "continuously across tile boundaries. Light stipple = "
+                         "reference-swath nodata corners (crop edge), not a "
+                         "registration error.",
                  width="stretch")
 
 

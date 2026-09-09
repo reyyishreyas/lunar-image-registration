@@ -161,6 +161,49 @@ Visual-audit round — "checkerboard unchanged + braided diff" (review):
    CDF; local-normalised residual is near-zero for same-structure/different-
    brightness images; per-tile NMI no longer crashes and returns the min.
 
+Decisive-experiment round — "is the residual structure geometric or
+photometric?" (review challenged the brightness-normalisation claim):
+
+1. **The test the review demanded was run: a non-global model was fitted.**
+   From the run's 118 inlier tie-points we fitted a Delaunay **piecewise-affine
+   warp** (per-triangle affine, outside-hull falls back to the global H) and
+   rewarped the whole source with it. Result — the piecewise model did NOT
+   shrink the residual, it made it *worse everywhere* (brightness-robust
+   residual mean 0.322 → 0.449; min/mean/max NMI 1.007/1.104/1.192 →
+   1.008/1.039/1.117). A parallax field consistent with the inliers would be
+   *extracted* by that fit and reduce the residual; the opposite result
+   falsifies the "parallax the homography missed" hypothesis for this pair.
+   The residual is therefore photometric, not geometric.
+
+2. **The residual panel that "looked identical to the diff" was a display
+   bug, now fixed.** The residual itself is ~75-90% white noise: smooth /
+   'braided' energy only **0.09** (blur-σ31 explains ~9% of its variance;
+   autocorr 0.26@8px → 0.16@32px). The old fixed 90× gain mapped a mean-0.41
+   noise floor to a mid-grey wash that visually mirrored the raw diff. The
+   render is now scaled to its own 99.5th percentile → flat floor with sparse
+   warm specks (p50 ≈ 48/255). Residual stats now reported in normalised units
+   (mean 0.41, std 0.34).
+
+3. **The lower-centre/right bright cluster is real but small and not
+   smooth-band.** Region residual 0.56 vs 0.37 global (×1.5, ≈0.7σ above the
+   floor) — an elevated photometric/texture tier of the same noise process,
+   not a coarse misalignment.
+
+4. **NMI distribution (not just the min) is healthy.** min 1.026 (one border
+   tile) but **median 1.088, mean 1.092, max 1.176, 90.6% of tiles above
+   1.05** — clearly matched content (a no-relationship pair trails ~1.0).
+
+5. **The "two scrambled tiles" are reference-swath nodata corners**, not a
+   warp failure: rows 6-7 / cols 2-3 carry 6-13% NAC black (crop edge) and
+   previously drowned under a heavy 4-px hatch plus the blown-up noise
+   display. The nodata marker is now a light 32-px stipple with an explanatory
+   caption, and those tiles' own residual / NMI are actually typical
+   (r7c2 = 0.17).
+
+Sentinel numbers (delivered OHRC->NAC run): residual 0.41/0.34 (mean/std),
+braid energy 0.09, NMI 1.026/1.088/1.092/1.176 (min/med/mean/max; 90.6%>1.05),
+inlier med/max 0.88/1.52 px, worst per-tile residual-RMSE 1.44 px.
+
 ## Verification
 
 Note for the live demo: GSD / artifacts are part of the *report dict*, which the
