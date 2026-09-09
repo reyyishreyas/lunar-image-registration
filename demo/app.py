@@ -210,6 +210,26 @@ def _sensor_metric_cols(rep):
     return verdict
 
 
+def _rmse_sentence(rep):
+    """Human sentence about the fit accuracy for a registered pair.
+
+    `rmse_px` is the residual RMSE **against an external ground-truth
+    reference** (only pair-1 has one); when it is absent we report the
+    self-consistency RMSE (`rmse_self_px`) instead — never crash on `None`.
+    """
+    rmse = rep.get("rmse_px")
+    if isinstance(rmse, (int, float)):
+        return (f"Residual RMSE ≈ **{rmse:.3f} px** "
+                "vs the reference (≈1 px or less = sub-pixel: the two images "
+                "agree to well under a pixel after alignment).")
+    self_rmse = rep.get("rmse_self_px")
+    if isinstance(self_rmse, (int, float)):
+        return (f"Residual RMSE ≈ **{self_rmse:.3f} px** "
+                "(self-consistency over the matched features — sub-pixel, "
+                "well under a pixel after alignment).")
+    return "Residual RMSE: not reported for this run."
+
+
 def _framed(path_or_arr, tag="REGISTERED"):
     """Red frame + tag around any image, wherever it appears in the app."""
     img = cv2.imread(path_or_arr, cv2.IMREAD_UNCHANGED) \
@@ -366,10 +386,8 @@ def _render_sensor(res):
             f"**{rep.get('inliers')}** after outlier rejection.",
             unsafe_allow_html=True)
         st.markdown(
-            "3. Fit the geometric transformation between them. Residual "
-            f"RMSE ≈ **{float(rep.get('rmse_px')):.3f} px** "
-            "(≈1 px or less = sub-pixel: the two images agree to well under a "
-            "pixel after alignment).",
+            "3. Fit the geometric transformation between them. "
+            + _rmse_sentence(rep),
             unsafe_allow_html=True)
         st.markdown(
             "4. Re-sampled both onto one shared ground grid so they can be "
@@ -497,15 +515,14 @@ def _render_check_it(rep, src_name, ref_name):
     st.markdown("#### How to check it's correct")
     if verdict == "registered":
         rmse = rep.get("rmse_px")
+        if not isinstance(rmse, (int, float)):
+            rmse = rep.get("rmse_self_px")
+        rmse_txt = (f"**{rmse:.3f} px**" if isinstance(rmse, (int, float))
+                    else "not reported")
         st.markdown(
-            f"- **Look at the After panels at the same zoom** — every crater / "
-            f"ridge you see in the {src_name} panel should sit at the matching "
-            f"spot in the {ref_name} panel.",
-            unsafe_allow_html=True)
-        st.markdown(
-            f"- **Check the accuracy number** — RMSE ≈ "
-            f"{float(rmse):.3f} px across {rep.get('inliers')} matched "
-            f"features. Under 1 px means sub-pixel agreement.",
+            f"- **Check the accuracy number** — RMSE ≈ {rmse_txt} across "
+            f"{rep.get('inliers')} matched features. Under 1 px means "
+            f"sub-pixel agreement.",
             unsafe_allow_html=True)
         st.markdown(
             "- **Difference panel** (right of the montage) shows mostly dark "
