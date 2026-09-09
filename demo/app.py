@@ -201,13 +201,65 @@ def _sensor_metric_cols(rep):
     c = st.columns(4)
     icon, headline, kind = _friendly_status(verdict)
     c[0].metric("Method", rep.get("method") or "—")
-    c[1].metric("GSD", f"{rep.get('gsd_m'):.2f} m/px"
-                       if isinstance(rep.get("gsd_m"), (int, float)) else "—")
+    gsd = rep.get("gsd") or {}
+    if isinstance(gsd.get("src_est_m"), (int, float)) \
+            and isinstance(gsd.get("ref_est_m"), (int, float)):
+        gsd_txt = (f"src {gsd['src_est_m']:.2f} / ref {gsd['ref_est_m']:.2f}"
+                   + (" · ×{:.2f}".format(gsd["scale_ratio"])
+                      if isinstance(gsd.get("scale_ratio"), (int, float))
+                      else ""))
+    elif isinstance(gsd.get("staged_m"), (int, float)):
+        gsd_txt = f"{gsd['staged_m']:.2f} (staged)"
+    elif isinstance(rep.get("gsd_m"), (int, float)):
+        gsd_txt = f"{rep['gsd_m']:.2f}"
+    else:
+        gsd_txt = "—"
+    c[1].metric("GSD (m/px)", gsd_txt)
     rmse = rep.get("rmse_px")
     c[2].metric("RMSE (px)", f"{rmse:.3f}" if isinstance(rmse, float) else "n/a")
     c[3].metric("Inliers", f"{rep.get('inliers', 0)} ({rep.get('n_matches', 0)} raw)"
                             if rep.get("inliers") else "n/a")
     return verdict
+
+
+def _render_gsd(rep):
+    """Source/reference native GSD + scale ratio, with their derivation."""
+    gsd = rep.get("gsd") or {}
+    if not any(v is not None for v in (gsd.get("src_est_m"), gsd.get("ref_est_m"))):
+        return
+    rows = [
+        ("Source", gsd.get("src_est_m")),
+        ("Reference", gsd.get("ref_est_m")),
+        ("Staged common cell", gsd.get("staged_m")),
+        ("Native scale ratio (ref/src)",
+         gsd.get("scale_ratio")),
+    ]
+    with st.expander("Ground sample distance (native GSD) — the scale both "
+                     "images were registered at"):
+        st.table({k: [f"{v:g} m/px" if isinstance(v, (int, float)) else "—"]
+                  for k, v in rows})
+        st.caption(f"Derivation: {gsd.get('source', 'n/a')}. Source = ISRO "
+                   "ground grid; reference = georef native-vs-ground corners.")
+
+
+def _render_tile_residuals(rep):
+    """Per-region residual RMSE so a weak global fit can't hide a bad region."""
+    tr = rep.get("tile_residuals")
+    if not tr:
+        return
+    vals = [v for r in tr for v in r.values() if v is not None]
+    worst = max(vals) if vals else None
+    with st.expander("Per-region fit quality (4×4 tiles of inlier residual RMSE)"):
+        st.write("x = source tile column, y = source tile row. Values are the "
+                 "mean residual (px) of the matched features whose source "
+                 "point falls in that tile — a homography is a global model, so "
+                 "this shows whether any local region (relief/parallax) is "
+                 "systematically worse than the global self-RMSE.")
+        for i, row in enumerate(tr):
+            st.write(f"**row {i}**  ·  " + "   ".join(
+                f"{v:.2f}" if v is not None else "  –  " for v in row.values()))
+        st.caption(f"Worst region ≈ **{worst:.2f} px** "
+                   f"vs global self-RMSE {rep.get('rmse_self_px')} px.")
 
 
 def _rmse_sentence(rep):
@@ -278,22 +330,37 @@ def _render_ground_artifacts(rep, src_name="Source", ref_name="Reference"):
 
 
 def _render_best_product(rep):
-    """Show the best aligned product when the decision layer produced one."""
+    """Show the best aligned product when the decision layer produced one.
+
+    The aligned image is the source *warped onto the reference frame* — this is
+    the deliverable. A registered checkerboard is additionally shown when
+    present; it is built from the *warped* source vs the reference, so features
+    continue across tile boundaries (never the un-warped raw crops).
+    """
     d = rep.get("decision") or {}
-    aligned = (rep.get("artifacts") or {}).get("best_aligned") or \
-        d.get("best_product")
-    diff = (rep.get("artifacts") or {}).get("diff")
+    arts = rep.get("artifacts") or {}
+    aligned = arts.get("best_aligned") or d.get("best_product")
+    diff = arts.get("diff")
     if not aligned or not os.path.exists(os.path.join(ROOT, str(aligned))):
         return
     st.markdown("#### Best aligned product")
     st.image(_framed(os.path.join(ROOT, str(aligned)), "BEST ALIGNED"),
-             caption="Source warped onto the reference frame (content matches "
-                     "only — this is the deliverable image).",
+             caption="Source **warped onto the reference frame** (content "
+                     "matches only — this is the deliverable image).",
              width="stretch")
     if diff and os.path.exists(os.path.join(ROOT, str(diff))):
         st.image(_framed(os.path.join(ROOT, str(diff)), "DIFF"),
                  caption="Pixel-level difference map against the reference "
                          "after alignment — warm = changed.", width="stretch")
+    chk = arts.get("checkerboard")
+    if chk and os.path.exists(os.path.join(ROOT, str(chk))) \
+            and str(chk) != str(aligned):
+        st.image(_framed(os.path.join(ROOT, str(chk)), "REGISTERED CHECKERBOARD"),
+                 caption="Checkerboard of the **warped** source vs the "
+                         "reference — features should run continuously across "
+                         "tile boundaries (built after alignment, not from raw "
+                         "crops on different grids).",
+                 width="stretch")
 
 
 def _render_before_after(rep, src_name="Source", ref_name="Reference"):
@@ -438,6 +505,8 @@ def _render_sensor(res):
     _render_before_after(rep, src_name, ref_name)
     _render_what_changed(rep, src_name, ref_name)
     _render_check_it(rep, src_name, ref_name)
+    _render_gsd(rep)
+    _render_tile_residuals(rep)
     _render_best_product(rep)
 
     georef = rep.get("georef") or {}

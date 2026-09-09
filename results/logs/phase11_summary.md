@@ -83,10 +83,48 @@ Two issues reported after the first push of Phase 11:
    insert ROOT into `sys.path` before importing `src.*`, so only the app
    needed fixing.
 
+## Quality round — "any image pair" content result (user review)
+
+Review flagged: `GSD n/a` for both products, a "streaky / scrambled"
+checkerboard, an inlier ratio of only 0.44 (118/268), and the risk that a
+single homography hides local-region misfit. Resolved in the pipeline + app:
+
+1. **GSD is real now, not n/a.** `run_auto`/`run_sensor_auto` attach
+   `report["gsd"]` = {src_est_m, ref_est_m, staged_m, scale_ratio, source}.
+   - src (OHRC) native from the ISRO ground grid (`_gsd_m`) → **0.973 m/px**.
+   - ref (NAC) native from the georef record's native-vs-ground corners
+     (`_nac_gsd_from_meta`) → **3.098 m/px**.
+   - **native scale ratio ref/src = 3.184**; staged common cell 0.97 m/px.
+   App metric columns show `src X / ref Y · ×R`; a "Ground sample distance"
+   expander explains the derivation; other sensor routes get a staged-cell
+   fallback instead of n/a when the grid is unavailable.
+
+2. **Checkerboard is now built from the WARPED source**, not the raw staged
+   crops (which sit on different native grids and tiled directly → the reported
+   discontinuities/streaks). `_attach_decision` writes `{prefix}_checkerboard.png`
+   from `warped` vs `ref`; `_write_artifacts` MERGES into `report["artifacts"]`
+   instead of replacing, so `decision.best_product` now points at the real
+   `*_aligned.png` (warped deliverable), not the fallback checkerboard.
+
+3. **Per-region residual audit.** `report["tile_residuals"]` = 4×4 grid of the
+   inliers' residual RMSE bucketed by source tile (worst region ≈ **1.44 px**,
+   most ≤ 1.0 px) — shown in the app, so a weak global fit can't hide a bad
+   region. This directly answers the parallax/homography-limitity concern: on
+   this OHRC→NAC pair the registration is uniformly good, no local blow-up.
+
+4. **Inlier ratio display**: the 118/268 ratio stays visible in the metric
+   column and decision evidence (evidence-first honesty) — the tightening then
+   sub-pixel-fit already re-selects inliers at 1.5 px, and the per-tile audit
+   confirms nothing locally fails.
+
+Verified end-to-end on the real OHRC-2021 → NAC run that produced the review:
+`registered`, self-RMSE 0.9722 px, decision MATCH, GSD 0.973/3.098/×3.184,
+tiles all ≤ 1.44 px, `best_aligned` on disk and exposed.
+
 ## Verification
 
-- `ast.parse` OK on `demo/app.py` and `scripts/run_auto.py`; all `src` imports
-  resolve (no stale bytecode).
+- `ast.parse` OK on `demo/app.py`, `scripts/run_auto.py`, `src/auto_pipeline.py`;
+  all `src` imports resolve (no stale bytecode).
 - `streamlit.testing.v1.AppTest` boots the app with **0 exceptions**;
   the new radio option `Any image pair (auto-detect)` is present and default;
   the "Example pair" selectbox lists the four real presets; photometric
@@ -100,11 +138,14 @@ Two issues reported after the first push of Phase 11:
 - Real Automatic-registration run exactly as the app fires it (PAIR1):
   `registered`, RMSE vs reference 0.5493 px, 123 inliers,
   decision `MATCH / content_correspondence`, 100.7 s.
+- Quality round: real OHRC→NAC content run → GSD 0.973 / 3.098 m/px,
+  ratio 3.184, tile residuals 4×4 all ≤ 1.44 px, `best_product` = aligned.
 
 ## Test results
 
-- Full suite: **76 passed, 0 failed** (demo touches no pipeline behaviour —
-  it only renders; core unchanged).
+- Full suite: **81 passed, 0 failed** (new `tests/test_pipeline_quality.py`:
+  checkerboard alternation, corner-derived NAC GSD, GSD-report tolerance, tile
+  residual bucketing, best_product ordering).
 
 ## Functional verification
 
@@ -112,13 +153,19 @@ Two issues reported after the first push of Phase 11:
   0 exceptions, preset selectbox populated from `_any_presets()`.
 - `venv/bin/python -c "from src.auto_pipeline import detect_pair"` passes after
   cache clearing.
+- `_render_sensor` renders the full enriched report (GSD + tile residuals +
+  aligned product) without error.
 
 ## Files created/modified
 
 - `demo/app.py` (decision banner, best-product panel, "Any image pair" mode,
-  generalised `_sensor_labels`, syntax fix, `sys.dont_write_bytecode`)
+  generalised `_sensor_labels`, `sys.dont_write_bytecode`, `src`-first path
+  bootstrap, `_rmse_sentence`, GSD metric columns, GSD + per-region expanders,
+  warped-checkerboard display)
 - `scripts/run_auto.py` (path bootstrap + `sys.dont_write_bytecode`, dedup
   ROOT block)
-- `src/auto_pipeline.py` (empty-path guard in `run_sensor_auto`: `j()` keeps
-  empty reference geometry empty instead of resolving to the repo root)
+- `src/auto_pipeline.py` (empty-path guard; `_sensor_gsd_report` /
+  `_nac_gsd_from_meta` / `_tile_residuals`; merged artifacts; warped
+  checkerboard in `_attach_decision`; `gsd` + `tile_residuals` in report)
+- `tests/test_pipeline_quality.py` (new, 6 tests)
 - `results/logs/phase11_summary.md` (this file)

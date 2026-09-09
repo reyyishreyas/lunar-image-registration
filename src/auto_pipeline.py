@@ -104,13 +104,97 @@ def _rmse(H, pts1, pts2):
     return float(np.sqrt(np.mean(r ** 2))), r
 
 
+def _nac_gsd_from_meta(meta):
+    """NAC native GSD (m/px) from the georef record's native corners + ground
+    corners (median over the four edges). Returns None when not derivable."""
+    if not meta:
+        return None
+    c = meta.get("nac_crop_corners_native")
+    g = meta.get("ground_corners_lon_lat")
+    if not c or not g or len(c) != 4 or len(g) != 4:
+        return None
+    c, g = np.asarray(c, float), np.asarray(g, float)
+    R = 111320.0
+    per = []
+    for k in range(4):
+        lo0, la0 = g[k]
+        lo1, la1 = g[(k + 1) % 4]
+        ground = np.hypot((lo1 - lo0) * R * np.cos(np.deg2rad(la0)),
+                          (la1 - la0) * R)
+        native = np.hypot(*(c[(k + 1) % 4] - c[k]))
+        if native > 0:
+            per.append(ground / native)
+    return float(np.median(per)) if per else None
+
+
+def _sensor_gsd_report(ohrc_geom, meta=None, staged_m=None):
+    """Native GSD estimates for a CH2 (src) vs NAC (ref) content pair.
+
+    - src (OHRC): from the ISRO geometry grid (exact, via ``_gsd_m``).
+    - ref (NAC): from the georef record's native-vs-ground corners (estimate).
+    Returns a dict {src_est_m, ref_est_m, staged_m, scale_ratio, source}.
+    """
+    g = {"src_est_m": None, "ref_est_m": None, "staged_m": staged_m,
+         "scale_ratio": None, "source": "n/a"}
+    try:
+        from src.preprocessing.tmc import read_ground_grid, _gsd_m
+        pix, scan, lon, lat = read_ground_grid(ohrc_geom)
+        v = float(_gsd_m(pix, scan, lon, lat))
+        if np.isfinite(v) and v > 0:
+            g["src_est_m"] = round(v, 3)
+            g["source"] = "ISRO ground grid"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        r = _nac_gsd_from_meta(meta)
+        if r is not None:
+            g["ref_est_m"] = round(r, 3)
+            g["source"] += "+" if g["source"] != "n/a" else "georef corners"
+    except Exception:  # noqa: BLE001
+        pass
+    if g["src_est_m"] and g["ref_est_m"]:
+        g["scale_ratio"] = round(g["ref_est_m"] / g["src_est_m"], 3)
+    return g
+
+
+def _tile_residuals(H, pts1, pts2, shape, tiles=4):
+    """Per-region residual RMSE (px) of the inliers, bucketed by source tile.
+
+    A single homography is weak for lunar terrain with real relief; this shows
+    whether any region of the image is systematically worse (local parallax)
+    than the global self-RMSE suggests. Returns a list of dicts.
+    """
+    if pts1.size == 0 or pts2.size == 0:
+        return []
+    r = np.linalg.norm(_apply_homography(H, np.asarray(pts1)) -
+                       np.asarray(pts2), axis=1)
+    th, tw = shape[0] // tiles, shape[1] // tiles
+    if th <= 0 or tw <= 0:
+        return []
+    rows = []
+    for i in range(tiles):
+        row = {}
+        for j in range(tiles):
+            sel = ((pts1[:, 0] >= j * tw) & (pts1[:, 0] < (j + 1) * tw) &
+                   (pts1[:, 1] >= i * th) & (pts1[:, 1] < (i + 1) * th))
+            if sel.sum() == 0:
+                row[j] = None
+            else:
+                row[j] = round(float(np.sqrt(np.mean(r[sel] ** 2))), 3)
+        rows.append(row)
+    return rows
+
+
 def _attach_decision(report, out_dir="", prefix="", join=lambda p: p,
                      src=None, ref=None, H=None):
     """Attach the definitive MATCH / NO MATCH decision + best product.
 
     For a content ``registered`` pair with a homography we also write the best
     aligned product: the source warped onto the reference frame (``_aligned``)
-    plus a Turbo difference map against the reference.
+    plus a Turbo difference map against the reference, and a **registered
+    checkerboard** built from the *warped* source vs the reference (so features
+    genuinely continue across tile boundaries — the raw staged crops sit on
+    different native grids and must NOT be tiled directly).
     """
     try:
         if src is not None and ref is not None and H is not None:
@@ -125,6 +209,9 @@ def _attach_decision(report, out_dir="", prefix="", join=lambda p: p,
                 cv2.imwrite(join(d_path), np.clip(diff, 0, 255).astype(np.uint8))
                 report.setdefault("artifacts", {})["best_aligned"] = aligned
                 report["artifacts"]["diff"] = d_path
+                chk_path = os.path.join(out_dir, f"{prefix}_checkerboard.png")
+                cv2.imwrite(join(chk_path), _checkerboard(warped, ref))
+                report["artifacts"]["checkerboard"] = chk_path
     except Exception as exc:  # noqa: BLE001
         report.setdefault("notes", []).append(
             f"best-aligned product not written: {exc}")
@@ -204,6 +291,8 @@ def run_auto(ohrc_img, ohrc_geom, nac_img, *, out_dir="data/processed/auto",
             st = stage_pair(pre, norm, root=root)
             src, ref = st["src"], st["ref"]
             report["staged_gsd_m"] = st["gsd_m"]
+            report["gsd"] = _sensor_gsd_report(
+                ohrc_geom, meta=st.get("meta"), staged_m=st.get("gsd_m"))
             if st["meta"]:
                 report["notes"].append(
                     f"georeference method={st['meta'].get('georef_method')}, "
@@ -282,6 +371,8 @@ def run_auto(ohrc_img, ohrc_geom, nac_img, *, out_dir="data/processed/auto",
         report["rmse_self_px"] = round(rmse_self, 4)
         report["inliers"] = int(keep.sum())
         report["inlier_ratio"] = round(float(keep.sum()) / len(m), 4)
+        report["tile_residuals"] = _tile_residuals(
+            Ht, pts1[keep], pts2[keep], src.shape, tiles=4)
 
         # RMSE against provided ground truth (if any)
         if ground_truth and os.path.exists(join(ground_truth)):
@@ -369,9 +460,33 @@ def _geometry_fallback(report, join, out_dir, prefix, ohrc_img, ohrc_geom,
     return _attach_decision(report, out_dir=out_dir, prefix=prefix)
 
 
+def _checkerboard(a, b, tiles=8):
+    """Alternating 8x8 tile mosaic of ``a`` (source) and ``b`` (reference).
+
+    Callers must pass the **warped** source so features continue across tile
+    boundaries; tiling raw crops on different native grids produces the
+    discontinuity/streak pattern users rightly flag as a bad registration.
+    """
+    chk = np.zeros_like(a)
+    th, tw = a.shape[0] // tiles, a.shape[1] // tiles
+    for i in range(tiles):
+        for j in range(tiles):
+            chk[i * th:(i + 1) * th, j * tw:(j + 1) * tw] = (
+                b[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
+                if (i + j) % 2 == 0
+                else a[i * th:(i + 1) * th, j * tw:(j + 1) * tw])
+    return chk
+
+
 def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,
                      prefix):
-    """Write match overlay + checkerboard; return artifact path dict."""
+    """Write match overlay + checkerboard; MERGE into report artifacts.
+
+    Merges (never replaces): the aligned/diff/checkerboard products written by
+    ``_attach_decision`` must survive so ``decision.best_product`` keeps
+    pointing at the real warped deliverable instead of falling back to the raw
+    staged-crop checkerboard.
+    """
     out = {}
     try:
         from src.evaluation.visualize import draw_matches
@@ -384,23 +499,19 @@ def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,
     except Exception as exc:  # noqa: BLE001
         report["notes"].append(f"match figure failed: {exc}")
 
-    # checkerboard of the staged aligned crops
+    # registered checkerboard (warped source vs ref) is written inside
+    # _attach_decision for content matches; only fall back to a raw mosaic here
+    # when no homography product exists at all.
     try:
-        chk = np.zeros_like(src)
-        tiles = 8
-        th, tw = src.shape[0] // tiles, src.shape[1] // tiles
-        for i in range(tiles):
-            for j in range(tiles):
-                chk[i * th:(i + 1) * th, j * tw:(j + 1) * tw] = (
-                    ref[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
-                    if (i + j) % 2 == 0
-                    else src[i * th:(i + 1) * th, j * tw:(j + 1) * tw])
-        c_path = os.path.join(out_dir, f"{prefix}_checkerboard.png")
-        cv2.imwrite(join(c_path), chk)
-        out["checkerboard"] = os.path.join(out_dir, f"{prefix}_checkerboard.png")
+        arts = report.setdefault("artifacts", {})
+        if not arts.get("checkerboard"):
+            c_path = os.path.join(out_dir, f"{prefix}_checkerboard.png")
+            cv2.imwrite(join(c_path), _checkerboard(src, ref))
+            out["checkerboard"] = c_path
     except Exception as exc:  # noqa: BLE001
         report["notes"].append(f"checkerboard figure failed: {exc}")
-    return out
+    arts.update(out)
+    return arts
 
 
 # --------------------------------------------------------------------------- #
@@ -538,6 +649,9 @@ def run_sensor_auto(sensor_pair, src_img, src_geom, ref_img, ref_geom, *,
         report = {"sensor_pair": sensor_pair, "verdict": "registration_failed",
                   "notes": [f"{sensor_pair} registration failed: {exc}"]}
     report.setdefault("sensor_pair", sensor_pair)
+    report.setdefault("gsd", _sensor_gsd_report(
+        src_geom, meta=report.get("diagnostics") or {},
+        staged_m=report.get("staged_gsd_m") or report.get("gsd_m")))
     _attach_decision(report, out_dir=join(out_dir), prefix=prefix)
     if verbose:
         print(f"[run_sensor_auto] {sensor_pair}: verdict={report.get('verdict')}"
