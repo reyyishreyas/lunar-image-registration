@@ -33,15 +33,19 @@ sys.dont_write_bytecode = True  # repo lives on a .mounty FUSE mount: mtime-base
                                 # stale auto_pipeline cache once (ImportError:
                                 # detect_pair).
 
+# Make `src` importable no matter how/whence the app is launched (the plain
+# 'from src.visuals' further down must not rely on the cwd being the repo root).
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (ROOT, os.getcwd()):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import cv2
 import numpy as np
 import streamlit as st
 import yaml
 
 from src.visuals import frame_img, diff_map
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
 
 FINAL_CONFIG = "results/final_config.yaml"
 DEMO_DIR = "data/processed/demo"

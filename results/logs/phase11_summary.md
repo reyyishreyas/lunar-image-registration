@@ -71,6 +71,18 @@ Two issues reported after the first push of Phase 11:
    cross_sensor_mismatch`) through the fixed empty-geometry logic. The "not
    working" impression was the stale cache coupled with the ~100 s runtime.
 
+4. **`ModuleNotFoundError: No module named 'src'` (@ `from src.visuals`)**
+   Pre-existing ordering bug in `demo/app.py`: the `from src.visuals import`
+   line sat *above* the `ROOT` computation / `sys.path.insert(0, ROOT)`, so
+   `src` only resolved because the repo root happened to be the process cwd.
+   Launching the app from any other directory broke the import. Fix: move the
+   `ROOT` bootstrap *before* all `src.*` imports and add `os.getcwd()` as a
+   second fallback, so the app is importable no matter how/whence it is run.
+   Verified by launching the app script with `cwd=/tmp` — it executes with no
+   `ModuleNotFoundError`. Other entry-point scripts were audited: they all
+   insert ROOT into `sys.path` before importing `src.*`, so only the app
+   needed fixing.
+
 ## Verification
 
 - `ast.parse` OK on `demo/app.py` and `scripts/run_auto.py`; all `src` imports
