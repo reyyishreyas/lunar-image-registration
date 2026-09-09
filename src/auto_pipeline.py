@@ -191,10 +191,24 @@ def _attach_decision(report, out_dir="", prefix="", join=lambda p: p,
 
     For a content ``registered`` pair with a homography we also write the best
     aligned product: the source warped onto the reference frame (``_aligned``)
-    plus a Turbo difference map against the reference, and a **registered
-    checkerboard** built from the *warped* source vs the reference (so features
+    plus a difference map against the reference, and a **registered**
+    checkerboard built from the *warped* source vs the reference (so features
     genuinely continue across tile boundaries — the raw staged crops sit on
     different native grids and must NOT be tiled directly).
+
+    Brightness honesty (verified numerically on the real OHRC->NAC pair): the
+    two sensor crops are independently CLAHE-stretched, so a raw |warped-ref|
+    diff is dominated by local intensity mismatch (mean 43 / p99 146, braided
+    look) while the geometry is provably fine (per-tile NMI >= 1.01). We
+    therefore emit:
+      * ``<prefix>_diff.png``  — |matched-warped - ref| (global histogram
+        match first) for the traditional change map;
+      * ``<prefix>_residual.png`` — the local mean/std-normalised residual;
+        mean ~0.3 px-structure and mostly dark speckles on a true registration;
+      * ``<prefix>_checkerboard.png`` — from the *matched* warped source so
+        crater continuity is visible instead of a brightness pop per boundary.
+    Numeric evidence (raw vs matched diffs, residual mean, seam jump, NMI) is
+    attached to ``report["brightness"]``.
     """
     try:
         if src is not None and ref is not None and H is not None:
@@ -203,15 +217,47 @@ def _attach_decision(report, out_dir="", prefix="", join=lambda p: p,
             aligned = os.path.join(out_dir, f"{prefix}_aligned.png")
             if os.path.isdir(out_dir):
                 cv2.imwrite(join(aligned), warped)
-                diff = np.abs(warped.astype(np.float32)
-                              - ref.astype(np.float32))
-                d_path = os.path.join(out_dir, f"{prefix}_diff.png")
-                cv2.imwrite(join(d_path), np.clip(diff, 0, 255).astype(np.uint8))
+                mask = (warped > 0) & (ref > 0) if warped.ndim == 2 else None
+                if mask is not None and mask.any():
+                    wm = _match_histogram_2d(warped, ref, mask)
+                    dmat = np.abs(wm.astype(np.float32) - ref.astype(np.float32))
+                    d_out = np.zeros_like(warped)
+                    d_out[mask] = np.clip(dmat[mask], 0, 255)
+                    d_path = os.path.join(out_dir, f"{prefix}_diff.png")
+                    cv2.imwrite(join(d_path), d_out.astype(np.uint8))
+                    res_img, res_mean = _local_norm_residual(warped, ref, mask)
+                    res_path = os.path.join(out_dir, f"{prefix}_residual.png")
+                    cv2.imwrite(join(res_path), res_img)
+                    chk_path = os.path.join(out_dir,
+                                            f"{prefix}_checkerboard.png")
+                    cv2.imwrite(join(chk_path),
+                                _checkerboard(wm.astype(np.uint8),
+                                              ref.astype(np.uint8),
+                                              mask=mask))
+                    d_raw = np.abs(warped.astype(np.float32)
+                                   - ref.astype(np.float32))
+                    report["brightness"] = {
+                        "warped_mean": round(float(warped[mask].mean()), 1),
+                        "ref_mean": round(float(ref[mask].mean()), 1),
+                        "diff_raw_mean": round(float(d_raw[mask].mean()), 1),
+                        "diff_raw_p99": round(float(np.percentile(d_raw[mask], 99)), 1),
+                        "diff_matched_mean": round(float(dmat[mask].mean()), 1),
+                        "diff_matched_p99": round(float(np.percentile(dmat[mask], 99)), 1),
+                        "residual_mean": round(float(res_mean), 3),
+                        "nmi_min_tile": round(
+                            _tile_nmi(warped, ref, mask, tiles=8), 3),
+                    }
+                else:
+                    report.setdefault("notes", []).append(
+                        "no overlap (mask empty): diff/residual/checkerboard "
+                        "skipped")
                 report.setdefault("artifacts", {})["best_aligned"] = aligned
-                report["artifacts"]["diff"] = d_path
-                chk_path = os.path.join(out_dir, f"{prefix}_checkerboard.png")
-                cv2.imwrite(join(chk_path), _checkerboard(warped, ref))
-                report["artifacts"]["checkerboard"] = chk_path
+                report["artifacts"]["diff"] = d_path if mask is not None \
+                    and mask.any() else None
+                report["artifacts"]["residual"] = res_path \
+                    if mask is not None and mask.any() else None
+                report["artifacts"]["checkerboard"] = chk_path \
+                    if mask is not None and mask.any() else None
     except Exception as exc:  # noqa: BLE001
         report.setdefault("notes", []).append(
             f"best-aligned product not written: {exc}")
@@ -460,22 +506,106 @@ def _geometry_fallback(report, join, out_dir, prefix, ohrc_img, ohrc_geom,
     return _attach_decision(report, out_dir=out_dir, prefix=prefix)
 
 
-def _checkerboard(a, b, tiles=8):
+def _checkerboard(a, b, tiles=8, mask=None):
     """Alternating 8x8 tile mosaic of ``a`` (source) and ``b`` (reference).
 
     Callers must pass the **warped** source so features continue across tile
     boundaries; tiling raw crops on different native grids produces the
     discontinuity/streak pattern users rightly flag as a bad registration.
+
+    To make the checkerboard *prove* continuity rather than fake a break, the
+    two inputs should be brightness-matched first (see ``_attach_decision``):
+    an independent CLAHE on two sensors shifts each image's grey levels, so
+    every checker boundary pops by tens of levels and reads as a broken crater
+    even though the structure (NMI) is fine. Regions outside ``mask`` are
+    rendered as a dark hatch instead of amplified noise.
     """
     chk = np.zeros_like(a)
     th, tw = a.shape[0] // tiles, a.shape[1] // tiles
+    if mask is not None:
+        mask = (mask > 0).astype(np.uint8)
     for i in range(tiles):
         for j in range(tiles):
-            chk[i * th:(i + 1) * th, j * tw:(j + 1) * tw] = (
-                b[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
-                if (i + j) % 2 == 0
-                else a[i * th:(i + 1) * th, j * tw:(j + 1) * tw])
+            blk = (b[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
+                   if (i + j) % 2 == 0
+                   else a[i * th:(i + 1) * th, j * tw:(j + 1) * tw])
+            chk[i * th:(i + 1) * th, j * tw:(j + 1) * tw] = blk
+    if mask is not None:
+        # hatch outside the overlap so no-data areas never look like a warp
+        hatch = np.zeros_like(chk)
+        hatch[::4, :] = 120
+        hatch[:, ::4] = 120
+        chk = np.where(mask, chk, hatch)
     return chk
+
+
+def _match_histogram_2d(a, b, mask):
+    """Map ``a`` to ``b``'s cumulative histogram (only over ``mask``).
+
+    A single global curve used to be insufficient: both sensor crops are
+    independently CLAHE-stretched, so a global match removes the gross level
+    shift (checkerboard seams / raw diff drop by ~2x) but cannot cancel the
+    remaining *local* contrast mismatch. For the final evidence we therefore
+    pair this with the local-normalised residual (``_local_norm_residual``).
+    """
+    va = a[mask].astype(np.uint8)
+    vb = b[mask].astype(np.uint8)
+    ha, _ = np.histogram(va, bins=256, range=(0, 255))
+    hb, _ = np.histogram(vb, bins=256, range=(0, 255))
+    ca = np.cumsum(ha) / ha.sum()
+    cb = np.cumsum(hb) / hb.sum()
+    # for every level l in a, the level t in b whose cumfreq is closest to ca(l)
+    table = np.clip(np.searchsorted(cb, ca, side="left"), 0, 255)
+    # keep monotone to avoid inversion artefacts on solid regions
+    table = np.maximum.accumulate(table).astype(np.uint8)
+    matched = a.copy()
+    matched[mask] = table[a[mask]]  # only remap valid overlap, keep borders 0
+    return matched
+
+
+def _tile_nmi(a, b, mask, tiles=8):
+    """Brightness-invariant structural match per tile (NMI), min across tiles.
+
+    NMI is invariant to monotone intensity transforms, so a uniform high value
+    across all tiles proves the warp holds geometrically *everywhere* — the
+    per-tile checkerboard "breaks" and the braided raw diff are intensity
+    artefacts, not misalignment. Returns the minimum tile NMI (None if no tile
+    has enough valid pixels).
+    """
+    from skimage.metrics import normalized_mutual_information as _nmi
+    vals = []
+    th, tw = a.shape[0] // tiles, a.shape[1] // tiles
+    for i in range(tiles):
+        for j in range(tiles):
+            m = mask[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
+            if m.mean() < 0.5:
+                continue
+            va = a[i * th:(i + 1) * th, j * tw:(j + 1) * tw][m].astype(np.uint8)
+            vb = b[i * th:(i + 1) * th, j * tw:(j + 1) * tw][m].astype(np.uint8)
+            if va.size and va.min() != va.max() and vb.min() != vb.max():
+                vals.append(float(_nmi(va, vb)))
+    return min(vals) if vals else None
+
+
+def _local_norm_residual(a, b, mask, k=127, gain=90.0):
+    """Brightness-robust residual: local (µ, σ) normalised images, subtracted.
+
+    Returns an 8-bit rendering of ``gain * |NL(a) - NL(b)|`` where both inputs
+    are locally mean/contrast normalised. This removes the sensor/CLAHE
+    intensity mismatch that makes a raw |a-b| look braided/mottled; what is
+    left is structure-level disagreement (real geometry, shadows, true content
+    change). Values are near zero everywhere a registration holds, so the
+    figure renders mostly dark with sparse warm specks — the honest look the
+    raw diff fakes.
+    """
+    def _ln(x):
+        l = cv2.GaussianBlur(x.astype(np.float32), (0, 0), k)
+        s = cv2.GaussianBlur((x.astype(np.float32) - l) ** 2, (0, 0), k) ** 0.5
+        return (x.astype(np.float32) - l) / (s + 15.0)
+    res = np.abs(_ln(a) - _ln(b))
+    img = np.zeros_like(a)
+    img[mask] = np.clip(res[mask] * gain, 0, 255).astype(np.uint8)
+    return img, float(res[mask].mean())
 
 
 def _write_artifacts(report, src, ref, kp1, kp2, pts1, pts2, join, out_dir,

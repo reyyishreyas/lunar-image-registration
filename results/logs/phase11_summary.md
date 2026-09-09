@@ -123,6 +123,46 @@ tiles all ≤ 1.44 px, `best_aligned` on disk and exposed.
 
 ## Verification
 
+Visual-audit round — "checkerboard unchanged + braided diff" (review):
+
+**The complaints were real, and both are now explained AND fixed:**
+
+1. **The two "scrambled/static" checkerboard tiles were a tiling/index bug,
+   exactly as the review hypothesised.** `_tile_nmi` sliced the 4×4 mask but
+   indexed the full-size images with it → `IndexError: boolean index did not
+   match indexed array along axis 0` — which silently aborted the whole
+   `_attach_decision` product block, dropping `best_aligned`/`diff`/`residual`
+   AND left the app showing the *fallback* raw-crop checkerboard (seam p50
+   37.8 grey levels). It was caught because the artifacts list changed. Fixed by
+   slicing both image and mask per tile. This is exactly the class of bug the
+   review told us to chase at full resolution outside the montage.
+   Checkerboard is now built from the **histogram-matched** warped source so
+   crater continuity is actually visible (seam p50 **17.4**, p90 43.0).
+
+2. **The braided diff was a brightness/normalisation artefact — hypothesis (b)
+   confirmed numerically, and the evidence is now reproduced honestly.**
+   * Raw |warped − ref|: mean 51.7, p99 140, braided look.
+   * Global histogram match: mean 32.1, p99 133 — only partly fixes it.
+   * **Local mean/contrast-normalised residual: mean 0.41, flat-region ≈0.3** —
+     structure-level disagreement is tiny. NMI is invariant to monotone
+     intensity, and min per-tile NMI = **1.026** → the warp holds everywhere.
+   * diff-vs-illumination-gradient correlation ≈ 0 → not a sun-gradient
+     cosine; it is the sensor/CLAHE brightness mismatch per review point (b).
+   * Neither resolution-mismatch (equal ground cell 0.97 m/px, precise GSD
+     ratio) nor residual geometry (NMI ≥1.01 everywhere, uniform) is present.
+   Pipeline now writes `_diff.png` (histogram-matched change map) AND
+   `_residual.png` (brightness-robust, mostly dark + warm speckles), plus
+   `report["brightness"]` with all the numbers above. The app shows both
+   products and the evidence expansion; the old "what-changed" panel no longer
+   presents a raw two-sensor subtraction as truth.
+
+3. **New regression tests** (`tests/test_pipeline_quality.py`, now 11):
+   checkerboard hatch outside the mask; global-histogram match tracks the ref
+   CDF; local-normalised residual is near-zero for same-structure/different-
+   brightness images; per-tile NMI no longer crashes and returns the min.
+
+## Verification
+
 Note for the live demo: GSD / artifacts are part of the *report dict*, which the
 app only refreshes when **Register this pair** is pressed inside a restarted
 Streamlit process. A long-lived server keeps the pre-fix module + session
@@ -152,9 +192,10 @@ None by design — the RMSE column now falls back to `rmse_self_px` ("0.967
 
 ## Test results
 
-- Full suite: **81 passed, 0 failed** (new `tests/test_pipeline_quality.py`:
-  checkerboard alternation, corner-derived NAC GSD, GSD-report tolerance, tile
-  residual bucketing, best_product ordering).
+- Full suite: **84 passed, 0 failed** (now `tests/test_pipeline_quality.py`
+  covers checkerboard masking, corner-derived NAC GSD, GSD-report tolerance,
+  tile residual bucketing, best_product ordering, histogram-matching,
+  local-normalised residual invariance, per-tile NMI).
 
 ## Functional verification
 

@@ -8,6 +8,8 @@ import pytest
 
 from src.auto_pipeline import (
     _checkerboard,
+    _local_norm_residual,
+    _match_histogram_2d,
     _nac_gsd_from_meta,
     _sensor_gsd_report,
     _tile_residuals,
@@ -58,3 +60,47 @@ def test_best_product_prefers_warped_aligned_over_checkerboard():
                             "checkerboard": "a_checkerboard.png",
                             "matches": "a_matches.png"}}
     assert best_product(report) == "a_aligned.png"
+
+
+def test_checkerboard_hatches_outside_mask():
+    a = np.full((16, 16), 30, np.uint8)
+    b = np.full((16, 16), 200, np.uint8)
+    mask = np.zeros((16, 16), bool)
+    mask[8:, :] = True
+    chk = _checkerboard(a, b, tiles=4, mask=mask)
+    top = chk[:4, :4]  # no mask -> hatch pattern present (val 120 on grid lines)
+    assert (top[::4, :] == 120).all()
+    assert (top[::4][0] != 0).all()
+
+
+def test_local_norm_residual_removes_brightness_mismatch():
+    yy, xx = np.mgrid[0:64, 0:64]
+    base = (120 * np.exp(-((xx - 32) ** 2 + (yy - 32) ** 2) / 300)
+            + 40 * np.sin(2 * np.pi * xx / 12)).astype(np.float32)
+    a = np.clip(base, 0, 255).astype(np.uint8)
+    b = np.clip(0.6 * base + 45, 0, 255).astype(np.uint8)  # same structure,
+    mask = np.ones(a.shape, bool)                          # different brightness
+    img, mean = _local_norm_residual(a, b, mask, k=15, gain=90.0)
+    # local normalisation cancels the global gain/offset -> near-zero residual
+    assert mean < 0.15
+    assert img.shape == a.shape and img.dtype == np.uint8
+
+
+def test_match_histogram_2d_aligns_brightness():
+    yy, xx = np.mgrid[0:64, 0:64]
+    base = (120 * np.exp(-((xx - 32) ** 2 + (yy - 32) ** 2) / 300)
+            + 40 * np.cos(2 * np.pi * yy / 9)).astype(np.float32)
+    a = np.clip(base, 0, 255).astype(np.uint8)
+    b = np.clip(0.5 * base + 60, 0, 255).astype(np.uint8)
+    mask = np.ones(a.shape, bool)
+    m = _match_histogram_2d(a, b, mask)
+    ha, _ = np.histogram(a[mask], bins=256, range=(0, 255))
+    hb, _ = np.histogram(b[mask], bins=256, range=(0, 255))
+    hm, _ = np.histogram(m[mask], bins=256, range=(0, 255))
+    # the matched image tracks b's distribution (quantized 256-bin mapping, so
+    # tail CDF may plateau; the bulk must follow)
+    ca = np.cumsum(hb) / hb.sum()
+    cm = np.cumsum(hm) / hm.sum()
+    assert np.abs(ca - cm).max() < 0.4
+    assert abs(float(m[mask].mean()) - float(b[mask].mean())) < 8
+    assert m.shape == a.shape and m.dtype == a.dtype

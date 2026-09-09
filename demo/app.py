@@ -265,8 +265,20 @@ def _render_tile_residuals(rep):
         for i, row in enumerate(tr):
             st.write(f"**row {i}**  ·  " + "   ".join(
                 f"{v:.2f}" if v is not None else "  –  " for v in row.values()))
+        br = rep.get("brightness") or {}
+        extra = ""
+        if isinstance(br.get("nmi_min_tile"), (int, float)):
+            extra = f"  ·  min per-tile NMI **{br['nmi_min_tile']:.3f}** " \
+                    "(brightness-invariant structural match — uniformly high " \
+                    "== geometry holds in every tile)"
+        if isinstance(br.get("residual_mean"), (int, float)):
+            extra += (f"  ·  brightness-robust residual mean "
+                      f"**{br['residual_mean']:.2f}** (raw |w−r| mean was "
+                      f"{br.get('diff_raw_mean')} → matched "
+                      f"{br.get('diff_matched_mean')})"
+                      if br.get("diff_raw_mean") else "")
         st.caption(f"Worst region ≈ **{worst:.2f} px** "
-                   f"vs global self-RMSE {rep.get('rmse_self_px')} px.")
+                   f"vs global self-RMSE {rep.get('rmse_self_px')} px.{extra}")
 
 
 def _rmse_sentence(rep):
@@ -313,7 +325,21 @@ def _render_ground_artifacts(rep, src_name="Source", ref_name="Reference"):
         b.image(_framed(os.path.join(ROOT, ref), "GEO-READY"),
                 caption=f"{ref_name} — ground-ready (frame = delivered product)",
                 width="stretch")
-    if src and ref and os.path.exists(os.path.join(ROOT, src)) \
+    # The honest "what changed" panel: the brightness-robust residual (local
+    # mean/contrast normalised) agreed after registration. A raw |src - ref| on
+    # two independently CLAHE-stretched sensor crops is dominated by brightness
+    # mismatch and reads as braided/mottled even on a perfect fit — that is a
+    # normalisation artefact, not geometry, so we no longer present it as truth.
+    res = arts.get("residual")
+    if res and os.path.exists(os.path.join(ROOT, res)):
+        st.image(_framed(os.path.join(ROOT, res), "RESIDUAL"),
+                 caption="What changed, after registration — **brightness-robust "
+                         "residual** (local mean/contrast normalised): warm "
+                         "(yellow/red) = structure-level change, dark/blue = "
+                         "already agreeing. Broad bright bands would mean real "
+                         "residual misalignment.",
+                 width="stretch")
+    elif src and ref and os.path.exists(os.path.join(ROOT, src)) \
             and os.path.exists(os.path.join(ROOT, ref)):
         sa = cv2.imread(os.path.join(ROOT, src), cv2.IMREAD_GRAYSCALE)
         rb = cv2.imread(os.path.join(ROOT, ref), cv2.IMREAD_GRAYSCALE)
@@ -357,8 +383,19 @@ def _render_best_product(rep):
              width="stretch")
     if diff and os.path.exists(os.path.join(ROOT, str(diff))):
         st.image(_framed(os.path.join(ROOT, str(diff)), "DIFF"),
-                 caption="Pixel-level difference map against the reference "
-                         "after alignment — warm = changed.", width="stretch")
+                 caption="Pixel difference vs the reference **after a global "
+                         "histogram match** (the two sensor crops are "
+                         "independently CLAHE-stretched, so a raw difference is "
+                         "dominated by brightness, not geometry). Warm = "
+                         "brightness-normalised change.", width="stretch")
+    res = arts.get("residual")
+    if res and os.path.exists(os.path.join(ROOT, str(res))):
+        st.image(_framed(os.path.join(ROOT, str(res)), "RESIDUAL"),
+                 caption="**Brightness-robust residual** (local mean/contrast "
+                         "normalised, then differenced): structure-level "
+                         "disagreement only. Mostly dark + sparse warm specks "
+                         "== the warp holds; broad bright bands == real "
+                         "residual misalignment.", width="stretch")
     chk = arts.get("checkerboard")
     if chk and os.path.exists(os.path.join(ROOT, str(chk))) \
             and str(chk) != str(aligned):
@@ -601,9 +638,10 @@ def _render_check_it(rep, src_name, ref_name):
             f"sub-pixel agreement.",
             unsafe_allow_html=True)
         st.markdown(
-            "- **Difference panel** (right of the montage) shows mostly dark "
-            "with warm speckles only on genuine illumination/feature "
-            "differences — not broad shifts.",
+            "- **Difference panel** is the brightness-robust residual (local "
+            "mean/contrast normalised): mostly dark with warm speckles only on "
+            "genuine illumination/feature differences — not broad bands or "
+            "braided structure, which would mean residual misalignment.",
             unsafe_allow_html=True)
     elif verdict == "geometry_registered":
         st.markdown(
