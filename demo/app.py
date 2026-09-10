@@ -1396,8 +1396,12 @@ def _render_patch_workbench():
     x0, y0, x1, y1 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
     x1 = max(x1, x0 + 8)
     y1 = max(y1, y0 + 8)
-    pa_s = a[y0:y1, x0:x1]
-    pa_r = b[y0:y1, x0:x1]
+    # Inlier coordinates are patch-local, so crop INSIDE the chosen patch
+    # (never the full staging image, whose framed corner reads as plain black).
+    src_p = a[r0:r1, c0:c1s]
+    ref_p = b[r0:r1, c0:c1s]
+    pa_s = src_p[y0:y1, x0:x1]
+    pa_r = ref_p[y0:y1, x0:x1]
     warp_b = cv2.warpPerspective(pa_s, H, (pa_r.shape[1], pa_r.shape[0]),
                                  flags=cv2.INTER_LINEAR)
     ca, cb = st.columns(2)
