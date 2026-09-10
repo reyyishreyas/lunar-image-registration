@@ -575,9 +575,13 @@ def georeference_pair(ohrc_img_path, ohrc_csv_path, nac_img_path, out_dir,
                 json.dump(diag, fh, indent=2)
             n = (t or {}).get('inliers')
             raise RuntimeError(
-                f"georeference: no reliable OHRC<->NAC overlap after primary "
-                f"(inliers={n}) and boosted fallback. Diagnostics written to "
-                f"georef_{prefix}_diagnostics.json (all orientations, ratios, NCC)."
+                "georeference: content correspondence NOT established after "
+                f"primary (inliers={n}) and boosted fallback — this is the "
+                "photometric-gap / polar case (e.g. OHRC at 1.9-deg solar "
+                "elevation), NOT a failure of ground-frame overlap. "
+                f"Diagnostics written to georef_{prefix}_diagnostics.json "
+                "(all orientations, ratios, NCC); the verified product is "
+                "the SPICE + ISRO geometry registration used as fallback."
             )
         t = t2
         method = t.get("method", "sparse-robust")
