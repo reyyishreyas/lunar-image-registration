@@ -391,6 +391,28 @@ def georeference_phase5(ohrc_img_path, ohrc_csv_path, nac_img_path, nac_csv_path
                               cv2.cvtColor(ru, cv2.COLOR_GRAY2BGR), 0.5, 0)
     cv2.imwrite(os.path.join(out_dir, "phase5_overlay.png"), overlay)
 
+    img_b = {"msrc": probe.get("self_src"), "mref": probe.get("self_ref"),
+             "mcross": probe.get("cross_full_strip")}
+    corr_v = (corr.get("verdict") if isinstance(corr, dict) else None)
+    audit_km = audit.get("pos_err_km_mean")
+    verification = (
+        f"geometry-consistent (100% in-bounds [{audit.get('in_bounds_frac')} "
+        f"of {audit.get('n_samples')} samples]; ODE overlap "
+        f"{ode_overlap_percent}%); feature correspondence NOT verifiable "
+        f"(photometric gap, sun elevation {sun_elevation_deg:.1f} deg): "
+        + (f"DISK+LightGlue cross={img_b['mcross']} vs self "
+           f"{{src {img_b['msrc']}, ref {img_b['mref']}}}, "
+           if img_b["mcross"] is not None else "")
+        + (f"low-frequency lock = {corr_v} "
+           f"(null {corr.get('null_rev_peak_value')} vs "
+           f"true {corr.get('true_peak_value')} peak)"
+           if corr_v else "")
+        + (f"; self-consistency {audit_km:.3e} km round-trip "
+           f"(sub-meter)" if audit_km is not None else "")
+        + "; all matchers ~0 matches (SIFT 14, SuperGlue 2, LoFTR 9/419, "
+        "dense NCC <= 0.06, template ZNCC <= 0.055)",
+    )
+
     meta = {
         "pair": ("OHRC-2026 ch2_ohr_ncp_20260331T1105235288_d_img_d18"
                  " <-> LRO NAC M1127547939RC"),
@@ -406,11 +428,7 @@ def georeference_phase5(ohrc_img_path, ohrc_csv_path, nac_img_path, nac_csv_path
         "coverage_audit": audit,
         "content_probe": probe,
         "correlator_lock_check": corr,
-        "verification": ("geometry-consistent (100% in-bounds, sub-meter "
-                         "self-consistency; ODE 100% overlap); feature "
-                         "correspondence NOT verifiable due to photometric gap "
-                         "(sun elevation 1.9 deg) - all matchers ~0 matches, "
-                         "low-frequency lock proven to be envelope artifact"),
+        "verification": verification,
         "src_png": os.path.join(out_dir, "phase5_src.png"),
         "ref_png": os.path.join(out_dir, "phase5_ref.png"),
         "overlay_png": os.path.join(out_dir, "phase5_overlay.png"),
