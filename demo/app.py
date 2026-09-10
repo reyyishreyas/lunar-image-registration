@@ -866,17 +866,48 @@ def build_upload_config(src_path, ref_path, normalize, out_path):
 
 
 def checkerboard(src, ref, tiles=8):
-    """Visual blending of the two already-aligned staged crops (display only)."""
+    """Visual blending of the two already-aligned staged crops (display only).
+
+    Cells tile the full frame (np.linspace edges, so odd dimensions leave no
+    black strip) and are feathered with a linear alpha ramp across each
+    boundary — a hard cut between independently CLAHE-stretched sensors pops
+    by tens of grey levels and reads as a fake break, while the ramp makes the
+    mosaic look like one continuous surface.
+    """
     h, w = src.shape[:2]
-    out = np.zeros((h, w), np.uint8)
-    th, tw = h // tiles, w // tiles
+    tiles = max(1, min(tiles, h, w))
+    er = np.linspace(0, h, tiles + 1).round().astype(np.int64)
+    ec = np.linspace(0, w, tiles + 1).round().astype(np.int64)
+
+    def _ramp(length):
+        fw = min(48, max(6, length // 5, 1))
+        if 2 * fw >= length:
+            fw = max(1, length // 2)
+            m = np.hanning(length).astype(np.float32)
+            m -= m.min(); m /= (m.max() or 1.0)
+            return m
+        r = np.ones(length, np.float32)
+        r[:fw] = np.linspace(0, 1, fw, dtype=np.float32)
+        r[-fw:] = np.linspace(1, 0, fw, dtype=np.float32)
+        return r
+
+    rows = [_ramp(er[i + 1] - er[i]) for i in range(tiles)]
+    cols = [_ramp(ec[j + 1] - ec[j]) for j in range(tiles)]
+    s32, r32 = src.astype(np.float32), ref.astype(np.float32)
+    out = np.zeros((h, w), np.float32)
     for i in range(tiles):
         for j in range(tiles):
+            i0, i1 = int(er[i]), int(er[i + 1])
+            j0, j1 = int(ec[j]), int(ec[j + 1])
+            wcell = np.minimum(rows[i][:, None], cols[j][None, :])
             use_ref = (i + j) % 2 == 0
-            out[i * th:(i + 1) * th, j * tw:(j + 1) * tw] = (
-                ref[i * th:(i + 1) * th, j * tw:(j + 1) * tw] if use_ref
-                else src[i * th:(i + 1) * th, j * tw:(j + 1) * tw])
-    return out
+            if use_ref:
+                out[i0:i1, j0:j1] = r32[i0:i1, j0:j1] * wcell + \
+                    s32[i0:i1, j0:j1] * (1.0 - wcell)
+            else:
+                out[i0:i1, j0:j1] = s32[i0:i1, j0:j1] * wcell + \
+                    r32[i0:i1, j0:j1] * (1.0 - wcell)
+    return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def run_demo(config_path):

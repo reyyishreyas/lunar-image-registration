@@ -517,31 +517,75 @@ def _geometry_fallback(report, join, out_dir, prefix, ohrc_img, ohrc_geom,
 
 
 def _checkerboard(a, b, tiles=8, mask=None):
-    """Alternating 8x8 tile mosaic of ``a`` (source) and ``b`` (reference).
+    """Alternating tile mosaic of ``a`` (source) and ``b`` (reference).
 
     Callers must pass the **warped** source so features continue across tile
     boundaries; tiling raw crops on different native grids produces the
     discontinuity/streak pattern users rightly flag as a bad registration.
 
-    To make the checkerboard *prove* continuity rather than fake a break, the
-    two inputs should be brightness-matched first (see ``_attach_decision``):
-    an independent CLAHE on two sensors shifts each image's grey levels, so
-    every checker boundary pops by tens of levels and reads as a broken crater
-    even though the structure (NMI) is fine. Regions outside ``mask`` are
-    rendered with a light, sparse stipple instead of amplified noise (the
-    dense crosshatch previously used read as 'scrambled/static' — those cells
-    are usually the reference crop's nodata corners, not a warp failure).
+    The two inputs are first brought to a shared low-frequency lighting, then
+    tiled, so the result looks like one continuous image:
+
+    * **Local-statistics match** — ``structure = img - blur(img)`` keeps the
+      fine crater structure but drops each sensor's independent low-frequency
+      lighting; the reference's blur is added back to both. Without this an
+      independent CLAHE on two sensors shifts grey levels per region, so every
+      checker boundary pops by tens of levels and reads as a broken crater
+      even though the structure (NMI) is fine. After matching, both sides of a
+      seam carry the SAME brightness and only real structure crosses it.
+    * **Full-grid tiling** — cell edges come from ``np.linspace``, so the
+      mosaic always covers the whole frame even when the dimensions are not
+      divisible by ``tiles`` (no dropped black row/column).
+    * **1–2 px seam feather** — a tiny alpha ramp so the pixel-thin boundary
+      blends instead of aliasing.
+
+    Regions outside ``mask`` are rendered with a light, sparse stipple instead
+    of amplified noise (the dense crosshatch previously used read as
+    'scrambled/static' — those cells are usually the reference crop's nodata
+    corners, not a warp failure).
     """
-    chk = np.zeros_like(a)
-    th, tw = a.shape[0] // tiles, a.shape[1] // tiles
+    h, w = a.shape[0], a.shape[1]
+    tiles = max(1, min(tiles, h, w))
+    er = np.linspace(0, h, tiles + 1).round().astype(np.int64)
+    ec = np.linspace(0, w, tiles + 1).round().astype(np.int64)
     if mask is not None:
         mask = (mask > 0).astype(np.uint8)
+
+    # shared low-frequency lighting (reference's blur), structure kept
+    sigma = max(5, min(h, w) // max(tiles, 1) // 2)
+    lf_b = cv2.GaussianBlur(b, (0, 0), sigma)
+    lf_a = cv2.GaussianBlur(a, (0, 0), sigma)
+    sa = np.clip(a.astype(np.float32) - lf_a + lf_b, 0, 255)
+    sb = b.astype(np.float32)               # reference already is the target
+
+    def _tile_ramp(length):
+        fw = max(1, min(3, length // 32))
+        if 2 * fw >= length:
+            fw = max(1, length // 2)
+            m = np.hanning(length).astype(np.float32)
+            m -= m.min(); m /= (m.max() or 1.0)
+            return m
+        r = np.ones(length, np.float32)
+        r[:fw] = np.linspace(0, 1, fw, dtype=np.float32)
+        r[-fw:] = np.linspace(1, 0, fw, dtype=np.float32)
+        return r
+
+    rows = [_tile_ramp(er[i + 1] - er[i]) for i in range(tiles)]
+    cols = [_tile_ramp(ec[j + 1] - ec[j]) for j in range(tiles)]
+    chk = np.zeros((h, w), np.float32)
     for i in range(tiles):
         for j in range(tiles):
-            blk = (b[i * th:(i + 1) * th, j * tw:(j + 1) * tw]
-                   if (i + j) % 2 == 0
-                   else a[i * th:(i + 1) * th, j * tw:(j + 1) * tw])
-            chk[i * th:(i + 1) * th, j * tw:(j + 1) * tw] = blk
+            i0, i1 = int(er[i]), int(er[i + 1])
+            j0, j1 = int(ec[j]), int(ec[j + 1])
+            wcell = np.minimum(rows[i][:, None], cols[j][None, :])
+            use_a = (i + j) % 2 == 0
+            if use_a:
+                chk[i0:i1, j0:j1] = sa[i0:i1, j0:j1] * wcell + \
+                    sb[i0:i1, j0:j1] * (1.0 - wcell)
+            else:
+                chk[i0:i1, j0:j1] = sb[i0:i1, j0:j1] * wcell + \
+                    sa[i0:i1, j0:j1] * (1.0 - wcell)
+    chk = np.clip(chk, 0, 255).astype(np.uint8)
     if mask is not None:
         # light 1-px stipple every 32 px marks 'no data here', dim enough that
         # it never reads as content
@@ -550,7 +594,7 @@ def _checkerboard(a, b, tiles=8, mask=None):
         stipple[:, ::32] = 64
         outside = (mask == 0)
         chk = np.where(outside, 64, chk)
-        chk = np.where(outside & (stipple == 64), 110, chk)
+        chk = np.where(outside & (stipple == 64), 110, chk).astype(np.uint8)
     return chk
 
 

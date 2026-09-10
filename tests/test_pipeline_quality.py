@@ -18,13 +18,21 @@ from src.auto_pipeline import (
 from src.evaluation.decision import best_product
 
 
-def test_checkerboard_alternates_between_a_and_b():
-    a = np.full((8, 8), 0, np.uint8)
-    b = np.full((8, 8), 255, np.uint8)
-    chk = _checkerboard(a, b, tiles=2)
-    # 2x2 tiles: (0,0)=b, (0,1)=a, (1,0)=a, (1,1)=b
-    assert chk[0, 0] == 255 and chk[0, 7] == 0
-    assert chk[7, 0] == 0 and chk[7, 7] == 255
+def test_checkerboard_is_continuous_and_covers_full_frame():
+    rng = np.random.default_rng(0)
+    a = rng.integers(0, 255, (64, 96)).astype(np.uint8)
+    b = rng.integers(0, 255, (64, 96)).astype(np.uint8)
+    chk = _checkerboard(a, b, tiles=4)
+    assert chk.shape == a.shape and chk.dtype == np.uint8
+    # full-frame coverage: no dropped black row/column on misaligned dims
+    assert (chk.sum(axis=1) > 0).all() and (chk.sum(axis=0) > 0).all()
+    # seams are brightness-matched (local statistics removed the offset), so a
+    # seam must not pop like a raw black/white alternation would
+    w = chk.shape[1] // 4
+    seams = [np.abs(chk[:, i * w - 4:i * w].astype(float)
+                   - chk[:, i * w:i * w + 4].astype(float)).mean()
+             for i in range(1, 4)]
+    assert max(seams) < 90
 
 
 def test_nac_gsd_from_meta_derived_from_corners():
