@@ -910,7 +910,7 @@ def main():
         use_cached = st.checkbox("Load cached demo output instead of running",
                                  value=False)
 
-    if mode.startswith("Patch workbench"):
+    if "Patch workbench" in mode:
         _render_patch_workbench()
         return
 
