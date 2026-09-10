@@ -155,6 +155,7 @@ def register_iirs_to_ohrc(iirs_qub, iirs_hdr, ohrc_img, ohrc_geom, out_dir,
     IIRS and OHRC cost low (crop-first rule).
     """
     from src.preprocessing.tmc import read_ch2_raw, OHRC_WIDTH
+    from src.preprocessing.ch2_staging import enhance_dark
     os.makedirs(out_dir, exist_ok=True)
     if bands is None:
         meta0 = parse_envi_header(iirs_hdr)
