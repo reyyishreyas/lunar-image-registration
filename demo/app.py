@@ -485,6 +485,65 @@ def _render_before_after(rep, src_name="Source", ref_name="Reference"):
                "ground-sample distance (GSD).")
 
 
+def _render_final_output(rep, src_name="Source", ref_name="Reference"):
+    """Three-panel deliverables strip: SOURCE | REFERENCE | FINAL OUTPUT.
+
+    Lets a reviewer instantly see which image is the created product: left is
+    the source instrument, middle is the reference, right is the delivered
+    result (or an honest 'no output' note when the pipeline refused).
+    """
+    arts = rep.get("artifacts") or {}
+    verdict = rep.get("verdict")
+
+    def _first(*keys):
+        for k in keys:
+            p = arts.get(k)
+            if p and os.path.exists(os.path.join(ROOT, p)):
+                return p
+        return None
+
+    src_p = _first("src", "after_src", "original_src")
+    ref_p = _first("ref", "after_ref", "original_ref")
+    gsd = rep.get("gsd_m")
+    gsd_txt = (f"**{float(gsd):.2f} m/px** ground grid"
+               if isinstance(gsd, (int, float)) else "common ground grid")
+
+    out_p, out_cap = None, None
+    if verdict == "registered":
+        out_p = arts.get("best_aligned")
+        out_p = out_p if (out_p and os.path.exists(os.path.join(ROOT, out_p))) else None
+        if out_p:
+            out_cap = (f"**FINAL OUTPUT — {src_name} warped onto {ref_name}** "
+                       f"({gsd_txt}). This is the created / delivered "
+                       f"registration product.")
+        else:
+            out_cap = f"**FINAL OUTPUT — {src_name}** on the shared {gsd_txt}."
+            out_p = src_p
+    elif verdict == "geometry_registered":
+        out_p = _first("src", "after_src")
+        out_cap = (f"**FINAL OUTPUT — {src_name}** on the shared {gsd_txt} — "
+                   f"registered in ground space from spacecraft geometry "
+                   f"(no content features existed to warp).")
+    else:
+        out_cap = (f"**No final output created** — the pipeline honestly "
+                   f"reports **{verdict}** for {src_name} vs {ref_name} "
+                   f"(no content match and/or no spacecraft geometry).")
+
+    st.markdown("#### Registered output — which image is the result")
+    a, b, c = st.columns(3)
+    if src_p:
+        a.image(_framed(os.path.join(ROOT, src_p), "SOURCE"),
+                caption=f"**Source** — {src_name}", width="stretch")
+    if ref_p:
+        b.image(_framed(os.path.join(ROOT, ref_p), "REFERENCE"),
+                caption=f"**Reference** — {ref_name}", width="stretch")
+    if out_p:
+        c.image(_framed(os.path.join(ROOT, out_p), "FINAL OUTPUT"),
+                caption=out_cap, width="stretch")
+    else:
+        c.markdown(f"⛔ {out_cap}")
+
+
 def _render_sensor(res):
     """Reader-friendly report of a multi-sensor (TMC / IIRS vs OHRC) run.
 
@@ -560,6 +619,7 @@ def _render_sensor(res):
             unsafe_allow_html=True)
 
     _render_before_after(rep, src_name, ref_name)
+    _render_final_output(rep, src_name, ref_name)
     _render_what_changed(rep, src_name, ref_name)
     _render_check_it(rep, src_name, ref_name)
     _render_gsd(rep)
@@ -1342,7 +1402,8 @@ def _render_patch_workbench():
                                  flags=cv2.INTER_LINEAR)
     ca, cb = st.columns(2)
     ca.image(pa_s, caption="Patch — source (raw)", clamp=True, width="stretch")
-    cb.image(warp_b, caption="Patch — source warped into reference frame",
+    cb.image(warp_b, caption="FINAL OUTPUT — source patch warped into the "
+                             "reference frame",
              clamp=True, width="stretch")
     st.caption("Below-threshold residual: no missed warp if the two look "
                "aligned; the number to trust is self-RMSE above.")
