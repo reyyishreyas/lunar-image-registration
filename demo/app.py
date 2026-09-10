@@ -699,14 +699,21 @@ def _render_pipeline_trace(rep, sensor="tmc-ohrc"):
     -> matcher -> transformation -> accuracy. Lets an evaluator see exactly what
     was registered and how, without digging into JSON."""
     src_name, ref_name = _sensor_labels(sensor)
-    pair = rep.get("pair") or {}
-    georef = rep.get("georef") or {}
+    pair = rep.get("pair")
+    pair = pair if isinstance(pair, dict) else {}
+    georef = rep.get("georef")
+    georef = georef if isinstance(georef, dict) else {}
     src_gr, ref_gr = georef.get("src", {}), georef.get("ref", {})
-    dg = rep.get("diagnostics") or {}
+    dg = rep.get("diagnostics")
+    dg = dg if isinstance(dg, dict) else {}
+
+    def _name(label, key, fallback):
+        f = pair.get(key) if isinstance(pair, dict) else None
+        return f"{label}" + (f" · `{os.path.basename(f)}`" if f else fallback)
 
     rows = [
-        ("Source (moving)", f"{src_name} · `{os.path.basename(pair.get('src', '?'))}`"),
-        ("Reference (fixed)", f"{ref_name} · `{os.path.basename(pair.get('ref', '?'))}`"),
+        ("Source (moving)", _name(src_name, "src", " · ?")),
+        ("Reference (fixed)", _name(ref_name, "ref", " · ?")),
     ]
     s_gsd, r_gsd = src_gr.get("gsd_m"), ref_gr.get("gsd_m")
     rows.append(("Source native GSD",
@@ -718,6 +725,10 @@ def _render_pipeline_trace(rep, sensor="tmc-ohrc"):
     common = rep.get("gsd_m")
     if isinstance(common, (int, float)):
         rows.append(("Common ground-grid GSD", f"{common:.3f} m/px"))
+    if not georef:
+        rows.append(("Ground geometry",
+                     "content-only attempt — no ISRO/SPICE ground grid "
+                     "available for this sensor"))
 
     if dg:
         r_m = dg.get("ref_mean", 0)
@@ -1071,9 +1082,14 @@ def _render_pair2_resolution(meta):
 def _workbench_pairs():
     """Every pair the demo can make selectable for the patch workbench.
 
-    Each entry carries its own honest category: MATCH / NO MATCH / PERFECT
-    MATCH control. The app is not hardcoded to a single pair: this list is the
-    single source the workbench dropdown reads from.
+    Ordered deliberately to show a user the three honest outcomes first:
+      1. MATCH         — pair-1, clean content correspondence.
+      2. PARTIAL MATCH — TMC x OHRC, content only re-locks AFTER geometry
+                         co-locates the dark strips (weak but real).
+      3. NO MATCH      — IIRS x OHRC, thermal vs visible: no shared signal.
+    Then the two controls everyone should be able to re-run:
+      * NO MATCH       — pair-2 polar: correspondence proven physically absent.
+      * PERFECT MATCH  — LRO NAC self-control: the matchers are proven working.
     """
     return [
         dict(
@@ -1084,9 +1100,36 @@ def _workbench_pairs():
             src_png="data/processed/pair1_src.png",
             ref_png="data/processed/pair1_ref.png",
             gsd="equal-GSD staged (0.97 ⟷ 3.10 m/px)",
-            note="Champion content pair: 235/286 inliers, sub-pixel against the "
-                 "tight GT-v2. Choose any patch and the matcher should still "
-                 "lock.",
+            note="The clean example that WORKS end to end: 235/286 inliers, "
+                 "sub-pixel against the tight GT-v2. Any patch you pick should "
+                 "still lock and report inliers + self-RMSE.",
+        ),
+        dict(
+            id="tmc-ohrc",
+            banner="🟡",
+            category="PARTIAL MATCH",
+            label="PARTIAL MATCH — TMC ⟷ OHRC (dark, staged re-lock)",
+            src_png="data/processed/demo/sensor/tmc-ohrc_after_src.png",
+            ref_png="data/processed/demo/sensor/tmc-ohrc_after_ref.png",
+            gsd="21.70 m/px (staged working crops)",
+            note="The RAW pair is too dark to match (reference mean ~6/255) — "
+                 "a NO MATCH. But once geometry co-locates both strips on the "
+                 "same 21.7 m/px grid, the staged crops re-lock with a "
+                 "near-identity transform: partial, geometry-mediated content. "
+                 "Watch the RMSE drop to ~0.002 px — that is the geometry "
+                 "being verified, not a cross-sensor content claim.",
+        ),
+        dict(
+            id="iirs-ohrc",
+            banner="⛔",
+            category="NO MATCH",
+            label="NO MATCH — IIRS ⟷ OHRC (thermal vs visible)",
+            src_png="data/processed/demo/sensor/iirs-ohrc_src.png",
+            ref_png="data/processed/demo/sensor/iirs-ohrc_ref.png",
+            gsd="256×256 working crops",
+            note="Hyperspectral infrared vs visible light share no comparable "
+                 "signal. The pipeline says so honestly (no geometry grid "
+                 "exists for IIRS, so there is no fallback either).",
         ),
         dict(
             id="pair2",
@@ -1101,32 +1144,6 @@ def _workbench_pairs():
                  "by content — expect NO MATCH on any honest patch analysis.",
         ),
         dict(
-            id="tmc-ohrc",
-            banner="🔎",
-            category="GEOMETRY-VERIFIED (staged crops)",
-            label="TMC ⟷ OHRC (dark / low-sun) — staged crops re-verify geometry",
-            src_png="data/processed/demo/sensor/tmc-ohrc_after_src.png",
-            ref_png="data/processed/demo/sensor/tmc-ohrc_after_ref.png",
-            gsd="21.70 m/px (staged working crops)",
-            note="The RAW pair is a NO MATCH (reference mean ~6/255 — the "
-                 "pipeline never invents features on dark data). But once "
-                 "geometry has co-located both strips on the same 21.7 m/px "
-                 "grid, the staged crops re-lock with a near-identity "
-                 "transform — that is the pipeline *verifying its geometry "
-                 "product*, not a cross-sensor content claim.",
-        ),
-        dict(
-            id="iirs-ohrc",
-            banner="⛔",
-            category="NO MATCH",
-            label="NO MATCH — IIRS ⟷ OHRC (thermal vs visible)",
-            src_png="data/processed/demo/sensor/iirs-ohrc_src.png",
-            ref_png="data/processed/demo/sensor/iirs-ohrc_ref.png",
-            gsd="256×256 working crops",
-            note="Hyperspectral infrared vs visible light share no comparable "
-                 "signal; the pipeline says so instead of faking a match.",
-        ),
-        dict(
             id="nac-self",
             banner="💎",
             category="PERFECT MATCH",
@@ -1135,8 +1152,9 @@ def _workbench_pairs():
             ref_png=None,
             gsd="native ~4–5 m/px; two overlapping windows of the same image",
             note="The honest proof that the matchers work: two overlapping "
-                 "windows of the SAME LRO NAC strip lock cleanly, while the "
-                 "same code finds nothing on pair-2.",
+                 "windows of the SAME LRO NAC strip lock cleanly (near "
+                 "zero-RMSE), while the same code finds nothing on pair-2 "
+                 "or IIRS.",
         ),
     ]
 
