@@ -30,7 +30,7 @@ Multi-modal, Sun-angle and Scale-invariant Image Correspondence using Chandrayaa
 
 ## Problem Statement
 
-Image registration is the process of aligning two or more images of the same scene — taken at different times, from different viewpoints, or by different sensors — into a common coordinate system. This project registers **Chandrayaan-2 optical images (OHRC, TMC-2, IIRS)** against reference lunar imagery (e.g. **LRO NAC**), overcoming three core challenges:
+Image registration is the process of aligning two or more images of the same scene — taken at different times, from different viewpoints, or by different sensors  ,  into a common coordinate system. This project registers **Chandrayaan-2 optical images (OHRC, TMC-2, IIRS)** against reference lunar imagery (e.g. **LRO NAC**), overcoming three core challenges:
 
 | Challenge | Description |
 |---|---|
