@@ -1,7 +1,7 @@
 # Multi-modal Lunar Image Registration
 
 **Smart India Hackathon — Problem Statement 26166**
-Multi-modal, Sun-angle and Scale-invariant Image Correspondence using Chandrayaan-2 Optical Images (OHRC, TMC, IIRS)
+Multimodal, Sunangle and Scale-invariant Image Correspondence using Chandrayaan-2 Optical Images (OHRC, TMC, IIRS)
 
 **Organization:** Indian Space Research Organisation (ISRO), Department of Space
 **Category:** Software | **Theme:** Space Technology
